@@ -1,0 +1,2049 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Финансово-операционная модель доставки (Чехов и агломерация)</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Leaflet CSS & JS (поддержка проекции L.CRS.EPSG3395 для Яндекс.Карт) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <!-- SheetJS для экспорта в Excel (.xlsx) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <!-- Google Fonts: Inter -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #f8fafc;
+      color: #0f172a;
+    }
+    .route-map-box {
+      height: 450px;
+      width: 100%;
+      border-radius: 0.75rem;
+      z-index: 10;
+      background-color: #e2e8f0;
+    }
+    .tab-btn.active {
+      border-bottom: 2px solid #2563eb;
+      color: #2563eb;
+      background-color: #eff6ff;
+      font-weight: 600;
+    }
+    .custom-pin-icon {
+      background: transparent !important;
+      border: none !important;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+  <!-- Всплывающие уведомления -->
+  <div id="toast-container" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm"></div>
+
+  <!-- Верхняя шапка -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-base shadow-sm">
+          ЦТК
+        </div>
+        <div>
+          <h1 class="text-base sm:text-lg font-bold text-slate-900 leading-tight">
+            Финансово-операционная модель оператора доставки
+          </h1>
+          <p class="text-xs text-slate-500">
+            Проект «Доставка в малом городе» • Яндекс.Карты + OSRM + Мультимаршруты
+          </p>
+        </div>
+      </div>
+
+      <!-- Выбор города и экспорт -->
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="city-selector" onchange="switchCity(this.value)" class="text-sm bg-slate-50 border border-slate-300 rounded-lg px-3 py-2 font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="chekhov" selected>г. Чехов (Базовая модель)</option>
+          <option value="pushchino">г. Пущино (Агломерация)</option>
+          <option value="protvino">г. Протвино (Агломерация)</option>
+          <option value="kremenki">г. Кремёнки (Агломерация)</option>
+        </select>
+
+        <button onclick="resetAll()" class="text-xs sm:text-sm px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-medium transition">
+          Сбросить
+        </button>
+
+        <button onclick="exportToExcel()" class="text-xs sm:text-sm px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-xs transition flex items-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+          Скачать Excel (.xlsx)
+        </button>
+      </div>
+    </div>
+
+    <!-- Сводный дашборд KPI по всем маршрутам -->
+    <div class="bg-slate-50 border-t border-slate-200">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 py-2.5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">Выручка / мес.</div>
+          <div id="kpi-revenue" class="text-sm sm:text-base font-bold text-slate-900 mt-0.5">0 ₽</div>
+        </div>
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">Перем. затраты / заказ</div>
+          <div id="kpi-var-cost" class="text-sm sm:text-base font-bold text-amber-600 mt-0.5">0,00 ₽</div>
+        </div>
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">Маржа на заказ</div>
+          <div id="kpi-margin" class="text-sm sm:text-base font-bold text-blue-600 mt-0.5">0,00 ₽</div>
+        </div>
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">Прибыль (после УСН)</div>
+          <div id="kpi-net-profit" class="text-sm sm:text-base font-bold text-emerald-600 mt-0.5">0 ₽</div>
+        </div>
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">BEP (до / после УСН)</div>
+          <div id="kpi-bep" class="text-sm sm:text-base font-bold text-slate-900 mt-0.5">0 / 0 зак.</div>
+        </div>
+        <div class="bg-white p-2.5 rounded-lg border border-slate-200/80 shadow-2xs">
+          <div class="text-[11px] text-slate-500 font-medium">Полная себест. заказа</div>
+          <div id="kpi-full-cost" class="text-sm sm:text-base font-bold text-slate-700 mt-0.5">0,00 ₽</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Навигация по разделам -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 overflow-x-auto">
+      <nav class="flex space-x-1 border-t border-slate-100">
+        <button onclick="openTab('tab-routing')" id="btn-tab-routing" class="tab-btn active px-4 py-2.5 text-sm whitespace-nowrap transition rounded-t-lg flex items-center gap-1.5">
+          <span>🗺️ Маршрутизация (Карта)</span>
+        </button>
+        <button onclick="openTab('tab-assumptions')" id="btn-tab-assumptions" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          1. Допущения
+        </button>
+        <button onclick="openTab('tab-fixed')" id="btn-tab-fixed" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          2. Постоянные
+        </button>
+        <button onclick="openTab('tab-route-costs')" id="btn-tab-route-costs" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          3. Маршрут (Затраты)
+        </button>
+        <button onclick="openTab('tab-finmodel')" id="btn-tab-finmodel" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          4. Финансовая модель
+        </button>
+        <button onclick="openTab('tab-sensitivity')" id="btn-tab-sensitivity" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          5. Чувствительность
+        </button>
+        <button onclick="openTab('tab-recommendations')" id="btn-tab-recommendations" class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-slate-600 hover:text-slate-900 transition rounded-t-lg">
+          6. Рекомендации
+        </button>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Основная рабочая область -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
+
+    <!-- РАЗДЕЛ 0: КАРТА И УПРАВЛЕНИЕ МАРШРУТАМИ -->
+    <section id="tab-routing" class="tab-content space-y-6">
+      <div id="routes-container" class="space-y-6">
+        <!-- Карточки маршрутов рендерятся динамически -->
+      </div>
+
+      <!-- Кнопка добавления нового маршрута снизу -->
+      <div class="flex justify-center pt-2">
+        <button onclick="addNewRoute()" class="px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm shadow-md transition flex items-center gap-2">
+          <span class="text-lg leading-none">+</span>
+          <span>Добавить новый маршрут</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 1: ДОПУЩЕНИЯ (ОТДЕЛЬНО ДЛЯ КАЖДОГО МАРШРУТА) -->
+    <section id="tab-assumptions" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Допущения» — Параметры локального оператора</h2>
+            <p class="text-xs text-slate-500">У каждого маршрута свой набор из 25 допущений. Изменение любого значения пересчитывает финансовую модель.</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <!-- Переключатель маршрутов -->
+            <div id="assumptions-route-switcher" class="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200"></div>
+            <span class="text-xs px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 font-medium border border-blue-200">
+              27 драйверов модели
+            </span>
+          </div>
+        </div>
+        <!-- Баннер предупреждения о нехватке или избытке курьеров -->
+        <div id="courier-warning-banner" class="hidden mx-4 sm:mx-5 mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-300 text-rose-800 text-xs sm:text-sm font-semibold flex items-center gap-2.5 shadow-2xs"></div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4 w-12">№</th>
+                <th class="py-3 px-4">Параметр</th>
+                <th class="py-3 px-4 w-36">Значение</th>
+                <th class="py-3 px-4 w-28">Ед. изм.</th>
+                <th class="py-3 px-4 w-24">Статус</th>
+                <th class="py-3 px-4">Источник и методический комментарий</th>
+              </tr>
+            </thead>
+            <tbody id="assumptions-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 2: ПОСТОЯННЫЕ ЗАТРАТЫ -->
+    <section id="tab-fixed" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200">
+          <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Постоянные» — Месячные постоянные затраты оператора (OPEX)</h2>
+          <p class="text-xs text-slate-500">Общие постоянные затраты предприятия в месяц (взносы с ФОТ, травматизм от админ-зарплаты и вычет УСН рассчитываются автоматически).</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4">Статья постоянных затрат</th>
+                <th class="py-3 px-4 w-40">Сумма, руб./мес.</th>
+                <th class="py-3 px-4 w-28">Статус</th>
+                <th class="py-3 px-4">Комментарий / источник</th>
+              </tr>
+            </thead>
+            <tbody id="fixed-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 3: МАРШРУТ (ЗАТРАТЫ НА 1 ЗАКАЗ ПО КАЖДОМУ МАРШРУТУ) -->
+    <section id="tab-route-costs" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Маршрут» — Калькуляция переменных затрат на 1 заказ</h2>
+            <p class="text-xs text-slate-500">Все статьи рассчитываются динамически из параметров пробега, времени цикла и тарифов на листе «Допущения».</p>
+          </div>
+          <div class="flex flex-wrap items-center gap-3">
+            <!-- Переключатель маршрутов -->
+            <div id="costs-route-switcher" class="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl border border-slate-200"></div>
+            <button onclick="openTab('tab-routing')" class="text-xs sm:text-sm px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium shadow-2xs transition">
+              Изменить маршрут на карте →
+            </button>
+          </div>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4">Статья затрат на 1 заказ</th>
+                <th class="py-3 px-4 w-36 text-right">Сумма, руб.</th>
+                <th class="py-3 px-4 w-28 text-right">Доля, %</th>
+                <th class="py-3 px-4 w-44">Тип затрат</th>
+                <th class="py-3 px-4">Формула расчёта (как в Excel)</th>
+              </tr>
+            </thead>
+            <tbody id="route-costs-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 4: ФИНАНСОВАЯ МОДЕЛЬ (СОВОКУПНЫЙ РАСЧЁТ ПО ВСЕМ МАРШРУТАМ) -->
+    <section id="tab-finmodel" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Финансовая модель» — Сводный P&L и точка безубыточности (по всем маршрутам)</h2>
+            <p class="text-xs text-slate-500">Агрегирует объём заказов, выручку и переменные затраты по всем активным маршрутам, покрывая общие постоянные расходы и налог УСН.</p>
+          </div>
+          <span id="finmodel-routes-badge" class="text-xs px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-200">
+            Активных маршрутов: 1
+          </span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4">Показатель</th>
+                <th class="py-3 px-4 w-44 text-right">Значение</th>
+                <th class="py-3 px-4 w-28">Ед. изм.</th>
+                <th class="py-3 px-4">Методическое пояснение / формула</th>
+              </tr>
+            </thead>
+            <tbody id="finmodel-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 5: ЧУВСТВИТЕЛЬНОСТЬ -->
+    <section id="tab-sensitivity" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200">
+          <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Чувствительность» — Сценарный анализ по совокупной модели</h2>
+          <p class="text-xs text-slate-500">Стресс-тестирование совокупного денежного потока и точки безубыточности по всем маршрутам.</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4">Сценарий</th>
+                <th class="py-3 px-4 text-right">Топливо</th>
+                <th class="py-3 px-4 text-right">Спрос</th>
+                <th class="py-3 px-4 text-right">Тариф</th>
+                <th class="py-3 px-4 text-right">Заказы/мес</th>
+                <th class="py-3 px-4 text-right">Выручка, ₽</th>
+                <th class="py-3 px-4 text-right">До УСН, ₽</th>
+                <th class="py-3 px-4 text-right">После УСН, ₽</th>
+                <th class="py-3 px-4 text-right">BEP (после УСН)</th>
+              </tr>
+            </thead>
+            <tbody id="sensitivity-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- РАЗДЕЛ 6: РЕКОМЕНДАЦИИ -->
+    <section id="tab-recommendations" class="tab-content hidden">
+      <div class="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        <div class="p-4 sm:p-5 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 class="text-base sm:text-lg font-bold text-slate-900">Лист «Рекомендации и ограничения» — Итоговые выводы</h2>
+            <p class="text-xs text-slate-500">Блок «Оценка» автоматически рассчитывается по количеству прибыльных сценариев в разделе «5. Чувствительность».</p>
+          </div>
+          <button onclick="addRecommendation()" class="text-xs px-3 py-1.5 bg-slate-800 text-white rounded-lg hover:bg-slate-900 font-medium">
+            + Добавить пункт
+          </button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left border-collapse text-sm">
+            <thead>
+              <tr class="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase">
+                <th class="py-3 px-4 w-56">Блок</th>
+                <th class="py-3 px-4">Содержание рекомендации / ограничения</th>
+                <th class="py-3 px-4 w-16 text-center">Удалить</th>
+              </tr>
+            </thead>
+            <tbody id="recommendations-tbody" class="divide-y divide-slate-100"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="bg-white border-t border-slate-200 py-4 mt-8">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 flex flex-wrap items-center justify-between text-xs text-slate-500 gap-2">
+      <div>Проект ЦТК «Доставка в малом городе» • Мультимаршрутная финансовая модель</div>
+      <div>Карты: © Яндекс.Карты (EPSG:3395) • Маршруты по дорогам: OSRM</div>
+    </div>
+  </footer>
+
+  <script>
+    // =========================================================================
+    // 1. ПРЕСЕТЫ ГОРОДОВ И БАЗОВЫЕ ДАННЫЕ
+    // =========================================================================
+
+    const CITY_PRESETS = {
+      chekhov: {
+        name: "Чехов",
+        center: [55.1625, 37.4660],
+        zoom: 14,
+        defaultPoints: [
+          { name: "Точка на карте (55.1533, 37.4596)", lat: 55.1533, lng: 37.4596 },
+          { name: "Точка на карте (55.1528, 37.4681)", lat: 55.1528, lng: 37.4681 },
+          { name: "Точка на карте (55.1688, 37.4681)", lat: 55.1688, lng: 37.4681 },
+          { name: "Точка на карте (55.1728, 37.4695)", lat: 55.1728, lng: 37.4695 }
+        ]
+      },
+      pushchino: {
+        name: "Пущино",
+        center: [54.8358, 37.6147],
+        zoom: 14,
+        defaultPoints: [
+          { name: "Точка на карте (54.8355, 37.6185)", lat: 54.8355, lng: 37.6185 },
+          { name: "Точка на карте (54.8392, 37.6062)", lat: 54.8392, lng: 37.6062 },
+          { name: "Точка на карте (54.8318, 37.6251)", lat: 54.8318, lng: 37.6251 },
+          { name: "Точка на карте (54.8340, 37.6290)", lat: 54.8340, lng: 37.6290 }
+        ]
+      },
+      protvino: {
+        name: "Протвино",
+        center: [54.8692, 37.2167],
+        zoom: 14,
+        defaultPoints: [
+          { name: "Точка на карте (54.8698, 37.2185)", lat: 54.8698, lng: 37.2185 },
+          { name: "Точка на карте (54.8752, 37.2241)", lat: 54.8752, lng: 37.2241 },
+          { name: "Точка на карте (54.8641, 37.2098)", lat: 54.8641, lng: 37.2098 },
+          { name: "Точка на карте (54.8620, 37.2150)", lat: 54.8620, lng: 37.2150 }
+        ]
+      },
+      kremenki: {
+        name: "Кремёнки",
+        center: [54.8886, 37.1189],
+        zoom: 14,
+        defaultPoints: [
+          { name: "Точка на карте (54.8888, 37.1195)", lat: 54.8888, lng: 37.1195 },
+          { name: "Точка на карте (54.8925, 37.1142)", lat: 54.8925, lng: 37.1142 },
+          { name: "Точка на карте (54.8851, 37.1248)", lat: 54.8851, lng: 37.1248 },
+          { name: "Точка на карте (54.8835, 37.1210)", lat: 54.8835, lng: 37.1210 }
+        ]
+      }
+    };
+
+    function createDefaultAssumptions(cityName = "Чехов", kmPerOrder = 2.08, hoursPerOrder = 0.1, pointsCount = 4) {
+      const qShift = 60;
+      const tCycleMin = (hoursPerOrder > 0 ? hoursPerOrder : 0.1) * 60;
+      const tShiftMin = 720; // 12 ч * 60 = 720 мин
+      const kLoad = 0.85;
+      const calculatedCouriers = Math.max(1, Math.ceil((qShift * tCycleMin) / (tShiftMin * kLoad)));
+
+      return [
+        { id: "daysInMonth", num: 1, name: "Дней в месяце", value: 30, unit: "дн.", status: "FH", source: "Календарный месяц для планового расчёта" },
+        { id: "ordersPerDay", num: 2, name: "Заказов в день в базовом сценарии", value: qShift, unit: "зак./день", status: "H", source: `Гипотеза локальной курьерской службы при магазине/кафе в г. ${cityName} (требует пилотной проверки)` },
+        { id: "operatorIncomePerOrder", num: 3, name: "Доход оператора на 1 заказ (тариф + комиссия)", value: 350, unit: "руб./зак.", status: "FM", source: "Сценарное допущение: плата за доставку клиентом (150–200 ₽) + комиссия партнёра-заведения" },
+        { id: "avgFoodCheck", num: 4, name: "Средняя стоимость доставляемого заказа (еда/товары)", value: 1000, unit: "руб./зак.", status: "FM", source: `Открытые меню заведений доставки в г. ${cityName} (роллы/пицца/продукты)` },
+        { id: "kmPerOrder", num: 5, name: "Полный пробег на 1 заказ (включая порожний)", value: kmPerOrder, unit: "км/зак.", status: "FM", source: `Авторасчёт OSRM (${cityName}): ${pointsCount} точек` },
+        { id: "hoursPerOrder", num: 6, name: "Полный цикл выполнения 1 заказа", value: hoursPerOrder, unit: "ч/зак.", status: "FM", source: `Авторасчёт OSRM + погрузка/вручение (${cityName})` },
+        { id: "fuelConsumption", num: 7, name: "Расход топлива автомобиля", value: 8, unit: "л/100 км", status: "FH", source: "Средний городской расход легкового автомобиля (Lada Granta / Renault Logan)" },
+        { id: "fuelPrice", num: 8, name: "Цена топлива", value: 66, unit: "руб./л", status: "FM", source: `Мониторинг розничных цен АЗС в Московской области (г. ${cityName})` },
+        { id: "courierHourlyRate", num: 9, name: "Оплата труда курьера (без авто)", value: 380, unit: "руб./ч", status: "FM", source: `Вакансии автокурьеров по г. ${cityName} (Авито Работа / hh.ru)` },
+        { id: "depreciationPerKm", num: 10, name: "Амортизация / износ личного авто (компенсация)", value: 3, unit: "руб./км", status: "H", source: "Оценка износа легкового автомобиля при пробеге 15 000 км/год" },
+        { id: "maintenancePerKm", num: 11, name: "ТО, ремонт и шины", value: 2, unit: "руб./км", status: "H", source: "Оценка планового ТО и сезонной резины на 1 км пробега" },
+        { id: "packagingPerOrder", num: 12, name: "Упаковка за счёт оператора доставки", value: 0, unit: "руб./зак.", status: "H", source: "Упаковку обеспечивает заведение-партнёр / магазин" },
+        { id: "failureProb", num: 13, name: "Вероятность неуспешной доставки / возврата", value: 0.01, unit: "доля (0.01 = 1%)", status: "H", source: "Консервативная гипотеза (1% отмен/компенсаций)" },
+        { id: "avgLossOnFailure", num: 14, name: "Средний убыток при неуспешной доставке", value: 1000, unit: "руб.", status: "FM", source: "Полная компенсация стоимости заказа при порче/недоставке" },
+        { id: "osagoAnnual", num: 15, name: "Годовой полис ОСАГО (для расчёта на 1 км)", value: 9000, unit: "руб./год", status: "FM", source: "Средний тариф ОСАГО для Московской области" },
+        { id: "annualMileage", num: 16, name: "Годовой пробег автомобиля для распределения ОСАГО", value: 15000, unit: "км/год", status: "H", source: "Расчётная база для распределения годовой страховки" },
+        { id: "otherVarPerOrder", num: 17, name: "Прочие переменные расходы на заказ (эквайринг/связь)", value: 5, unit: "руб./зак.", status: "H", source: "Комиссия за приём платежей и мобильный интернет курьера" },
+        { id: "socialContribRate", num: 18, name: "Ставка страховых взносов работодателя (администратор)", value: 0.3, unit: "доля (30%)", status: "FH", source: "Налоговый кодекс РФ (единый тариф страховых взносов)" },
+        { id: "injuryContribMonthly", num: 19, name: "Взносы на травматизм (0,2% от ФОТ)", value: 80, unit: "руб./мес.", status: "FH", source: "Тариф 0,2% от ФОТ администратора" },
+        { id: "usnTaxRate", num: 20, name: "Ставка налога УСН «Доходы»", value: 0.06, unit: "доля (6%)", status: "FH", source: "Налоговый кодекс РФ, гл. 26.2 (УСН 6%)" },
+        { id: "usnReductionLimit", num: 21, name: "Предельное уменьшение УСН за счёт страховых взносов", value: 0.5, unit: "доля (50%)", status: "FH", source: "НК РФ ст. 346.21 (для ИП с работниками / ООО — не более 50% налога)" },
+        { id: "ordersPerClientMonth", num: 22, name: "Заказов на 1 клиента в месяц", value: 2, unit: "зак./клиент", status: "H", source: "Оценка частоты повторных заказов локальной доставки" },
+        { id: "loyalClientsShare", num: 23, name: "Доля постоянных клиентов", value: 0.4, unit: "доля (40%)", status: "H", source: "Оценка удержания клиентской базы в малом городе" },
+        { id: "shiftDurationMin", num: 24, name: "Продолжительность смены (T_смена)", value: tShiftMin, unit: "мин.", status: "H", source: "Продолжительность смены в минутах (например, 12 ч × 60 = 720 мин или 8 ч × 60 = 480 мин)" },
+        { id: "shiftUtilization", num: 25, name: "Коэффициент полезного времени смены (K_загрузки)", value: kLoad, unit: "доля", status: "H", source: "Доля полезного времени смены (обычно 0.80–0.85; учитывает обед, ожидание сборки и пики)" },
+        { id: "couriersCount", num: 26, name: "Количество курьеров в смену/пуле", value: calculatedCouriers, unit: "чел.", status: "H", source: "Формула: ⌈(Q_смена × T_цикл) / (N_заказов/рейс × T_смена × K_загрузки)⌉ (с возможностью ручной правки)" },
+        { id: "vehiclesCount", num: 27, name: "Количество транспортных средств", value: calculatedCouriers, unit: "ед.", status: "H", source: "Личные автомобили курьеров (приравнено к количеству курьеров)" }
+      ];
+    }
+
+    function createRouteObject(id, index, preset, withDefaultPoints = true) {
+      const waypoints = withDefaultPoints
+        ? JSON.parse(JSON.stringify(preset.defaultPoints))
+        : [];
+      const ordersPerTrip = Math.max(1, waypoints.length - 1);
+      const osrmDistanceKm = withDefaultPoints ? 6.15 : 0;
+      const osrmDurationMin = withDefaultPoints ? 14 : 0;
+      const emptyPct = withDefaultPoints ? 42 : 0;
+
+      const totalRouteKm = osrmDistanceKm * (1 + emptyPct / 100);
+      const stopsCount = Math.max(1, waypoints.length - 1);
+      const totalCycleMin = osrmDurationMin + stopsCount * 6;
+
+      const kmPerOrder = waypoints.length >= 2 ? Number((totalRouteKm / ordersPerTrip).toFixed(2)) : 0;
+      const hoursPerOrder = waypoints.length >= 2 ? Number(((totalCycleMin / 60) / ordersPerTrip).toFixed(2)) : 0;
+
+      return {
+        id,
+        name: `Маршрут ${index}`,
+        emptyPct,
+        manualEmptyPct: false,
+        serviceMin: 6,
+        ordersPerTrip,
+        manualOrdersPerTrip: false,
+        manualCouriers: false,
+        baseOrdersDemand: 60,
+        targetOrdersPerDay: 60,
+        courierStatus: "optimal",
+        courierWarningMsg: "",
+        isRoundtrip: true,
+        osrmDistanceKm,
+        osrmDurationMin,
+        returnLegKm: 0,
+        routeGeometry: null,
+        waypoints,
+        assumptions: createDefaultAssumptions(preset.name, kmPerOrder, hoursPerOrder, waypoints.length)
+      };
+    }
+
+    let state = {
+      city: "chekhov",
+      activeAssumptionsRouteId: 1,
+      activeCostsRouteId: 1,
+      routes: [
+        createRouteObject(1, 1, CITY_PRESETS.chekhov, true)
+      ],
+      fixedCosts: [
+        { id: "officeRent", name: "Аренда помещения / диспетчерского пункта", amount: 15000, status: "FM", comment: "Помещение в г. Чехов / Склад", editable: true },
+        { id: "utilities", name: "Коммунальные платежи и эксплуатация", amount: 2000, status: "FM", comment: "Электроэнергия, уборка, охрана", editable: true },
+        { id: "communication", name: "Связь и интернет", amount: 2000, status: "FM", comment: "Корпоративная связь и интернет офиса", editable: true },
+        { id: "adminSalary", name: "Зарплата администратора / диспетчера", amount: 40000, status: "FM", comment: "1 штатная единица (диспетчер-логист)", editable: true },
+        { id: "marketingCac", name: "Реклама и маркетинг (привлечение заказов)", amount: 10000, status: "H", comment: "Локальная реклама, листовки, соцсети", editable: true },
+        { id: "softwareIt", name: "IT-поддержка, сервисы учёта и связи", amount: 3000, status: "FM", comment: "CRM, трекинг курьеров, эквайринг", editable: true },
+        { id: "training", name: "Обучение и ввод персонала", amount: 1000, status: "H", comment: "Инструктаж новых курьеров", editable: true },
+        { id: "socialContrib", name: "Страховые взносы работодателя (30% от ФОТ)", amount: 12000, status: "FH", formulaKey: "socialContrib", comment: "Единый тариф 30% от ФОТ администратора", editable: false },
+        { id: "injuryContrib", name: "Взносы на травматизм (0,2% от ФОТ)", amount: 80, status: "FH", formulaKey: "injuryContrib", comment: "0,2% от ФОТ администратора", editable: false },
+        { id: "accounting", name: "Бухгалтерское и юридическое сопровождение", amount: 5000, status: "FM", comment: "Аутсорсинг УСН 6%", editable: true },
+        { id: "bankFee", name: "Расчётный счёт и банковское обслуживание", amount: 1000, status: "FM", comment: "РКО банка для ИП / ООО", editable: true },
+        { id: "officeSupplies", name: "Офисные материалы и хозрасходы", amount: 1920, status: "H", comment: "Канцелярия, термосумки, расходники", editable: true }
+      ],
+      recommendations: [
+        { block: "1. Оптимальный тариф", text: "Для модели операционной курьерской службы при базе 350 руб./заказ (доставка клиентом + комиссия партнёра) проект сохраняет положительную маржу и устойчивость при консолидации от 3 заказов на рейс." },
+        { block: "2. Условия устойчивой работы", text: "Средний пробег на 1 заказ не выше 5 км с учётом порожнего возврата, плотность заказов не менее 50–60 в день по всем маршрутам и строгий контроль времени передачи заказа (до 6 минут)." },
+        { block: "3. Ключевые риски", text: "Падение спроса ниже 37 заказов/день (точка безубыточности после УСН), рост порожнего пробега при выезде в пригород свыше 10 км, а также одновременное снижение тарифа на 10% и падение спроса на 20%." },
+        { block: "4. Управленческие решения", text: "Внедрить батчинг (консолидацию 2–3 попутных заказов в один рейс), ввести динамическую надбавку за доставку в удалённые микрорайоны (> 7 км) и использовать гибкий график выхода курьеров под пиковые часы." },
+        { block: "5. Ограничения модели", text: "Модель носит кабинетный характер (классы данных FM/H). Перед масштабированием требуется 4–8 недель пилотного замера фактического времени ожидания в точках и доли отмен." }
+      ]
+    };
+
+    const RUSSIAN_LETTERS = ["А", "Б", "В", "Г", "Д", "Е", "Ж", "З", "И", "К", "Л", "М", "Н", "О", "П", "Р", "С", "Т"];
+    let nextRouteIdCounter = 2;
+    const mapInstances = {}; // { [routeId]: { map, container, markersLayer, lineLayer } }
+
+    function getPointLabel(idx) {
+      return idx < RUSSIAN_LETTERS.length ? `Точка ${RUSSIAN_LETTERS[idx]}` : `Точка ${idx + 1}`;
+    }
+
+    function getRouteAssumptionVal(route, id) {
+      const item = route.assumptions.find(x => x.id === id);
+      return item ? Number(item.value) : 0;
+    }
+
+    // =========================================================================
+    // 2. РАСЧЁТ ОТДЕЛЬНОГО МАРШРУТА И СОВОКУПНОЙ ФИНАНСОВОЙ МОДЕЛИ
+    // =========================================================================
+
+    function calculateSingleRoute(route, overrides = {}) {
+      const fuelMult = overrides.fuelMult ?? 1;
+      const demandMult = overrides.demandMult ?? 1;
+      const tariffMult = overrides.tariffMult ?? 1;
+
+      const daysInMonth = getRouteAssumptionVal(route, "daysInMonth");
+      const kmPerOrder = getRouteAssumptionVal(route, "kmPerOrder");
+      const hoursPerOrder = getRouteAssumptionVal(route, "hoursPerOrder");
+      const shiftDurationMin = Math.max(1, getRouteAssumptionVal(route, "shiftDurationMin") || 720);
+      const shiftUtilization = Math.max(0.05, Math.min(1, getRouteAssumptionVal(route, "shiftUtilization") || 0.85));
+
+      const ordersItem = route.assumptions.find(x => x.id === "ordersPerDay");
+      const couriersItem = route.assumptions.find(x => x.id === "couriersCount");
+      const vehiclesItem = route.assumptions.find(x => x.id === "vehiclesCount");
+
+      if (route.baseOrdersDemand === undefined) {
+        route.baseOrdersDemand = ordersItem ? Number(ordersItem.value) : 60;
+      }
+      route.targetOrdersPerDay = route.baseOrdersDemand;
+
+      const targetDemand = Math.max(0, route.baseOrdersDemand);
+      const ordersPerTrip = Math.max(1, route.ordersPerTrip || 1);
+      const cycleMinPerOrder = hoursPerOrder * 60;
+      const tripCycleMin = cycleMinPerOrder * ordersPerTrip;
+      const shiftCapacityPerCourierMin = shiftDurationMin * shiftUtilization;
+
+      // Оптимальное количество курьеров по формуле: ⌈(Q_смена × T_цикл_рейса) / (N_заказов/рейс × T_смена × K_загрузки)⌉
+      const optimalCouriers = tripCycleMin > 0
+        ? Math.max(1, Math.ceil((targetDemand * tripCycleMin) / (ordersPerTrip * shiftCapacityPerCourierMin)))
+        : 1;
+
+      let activeCouriers = couriersItem ? Math.max(1, Math.round(Number(couriersItem.value) || 1)) : optimalCouriers;
+
+      if (!route.manualCouriers) {
+        activeCouriers = optimalCouriers;
+        if (couriersItem) couriersItem.value = activeCouriers;
+        if (ordersItem) ordersItem.value = targetDemand;
+        route.courierStatus = "optimal";
+        route.courierWarningMsg = "";
+      } else {
+        if (couriersItem) couriersItem.value = activeCouriers;
+        if (activeCouriers < optimalCouriers) {
+          // Нехватка курьеров: снижаем заказы до максимального целого числа, которое они физически выполнят
+          const maxOrders = tripCycleMin > 0
+            ? Math.floor((activeCouriers * ordersPerTrip * shiftCapacityPerCourierMin) / tripCycleMin)
+            : targetDemand;
+          if (ordersItem) ordersItem.value = Math.max(0, maxOrders);
+          route.courierStatus = "under";
+          route.courierWarningMsg = "данное количество курьеров не справиться с числом заказов";
+        } else if (activeCouriers > optimalCouriers) {
+          // Избыток курьеров: заказы возвращаются к базовому спросу, но учитывается простой курьеров
+          if (ordersItem) ordersItem.value = targetDemand;
+          route.courierStatus = "over";
+          route.courierWarningMsg = "данное количество курьеров излишне для числа заказов";
+        } else {
+          if (ordersItem) ordersItem.value = targetDemand;
+          route.courierStatus = "optimal";
+          route.courierWarningMsg = "";
+        }
+      }
+
+      if (vehiclesItem) {
+        vehiclesItem.value = activeCouriers;
+      }
+
+      const baseOrdersPerDay = ordersItem ? Number(ordersItem.value) : targetDemand;
+      const ordersPerDay = baseOrdersPerDay * demandMult;
+      const ordersPerMonth = ordersPerDay * daysInMonth;
+
+      const operatorIncomePerOrder = getRouteAssumptionVal(route, "operatorIncomePerOrder") * tariffMult;
+      const fuelConsumption = getRouteAssumptionVal(route, "fuelConsumption");
+      const fuelPrice = getRouteAssumptionVal(route, "fuelPrice") * fuelMult;
+      const courierHourlyRate = getRouteAssumptionVal(route, "courierHourlyRate");
+      const depreciationPerKm = getRouteAssumptionVal(route, "depreciationPerKm");
+      const maintenancePerKm = getRouteAssumptionVal(route, "maintenancePerKm");
+      const packagingPerOrder = getRouteAssumptionVal(route, "packagingPerOrder");
+      const failureProb = getRouteAssumptionVal(route, "failureProb");
+      const avgLossOnFailure = getRouteAssumptionVal(route, "avgLossOnFailure");
+      const osagoAnnual = getRouteAssumptionVal(route, "osagoAnnual");
+      const annualMileage = getRouteAssumptionVal(route, "annualMileage");
+      const otherVarPerOrder = getRouteAssumptionVal(route, "otherVarPerOrder");
+
+      const ordersPerClientMonth = getRouteAssumptionVal(route, "ordersPerClientMonth");
+      const loyalClientsShare = getRouteAssumptionVal(route, "loyalClientsShare");
+
+      // Расчёт оплаты труда курьера с учётом простоя при избытке курьеров
+      const effectiveCycleHours = (activeCouriers > optimalCouriers && ordersPerDay > 0)
+        ? Math.max(hoursPerOrder, (activeCouriers * (shiftDurationMin / 60) * shiftUtilization) / ordersPerDay)
+        : hoursPerOrder;
+
+      const costFuel = (kmPerOrder * fuelConsumption / 100) * fuelPrice;
+      const costLabor = effectiveCycleHours * courierHourlyRate;
+      const laborFormulaText = (activeCouriers > optimalCouriers && ordersPerDay > 0)
+        ? `Учёт простоя: ${activeCouriers} курьеров × ${(shiftDurationMin / 60).toFixed(1)} ч × ${shiftUtilization} / ${Math.round(ordersPerDay)} зак. × ${courierHourlyRate} ₽/ч`
+        : `Цикл заказа (${hoursPerOrder} ч) × Ставка (${courierHourlyRate} ₽/ч)`;
+
+      const costDepr = kmPerOrder * depreciationPerKm;
+      const costMaint = kmPerOrder * maintenancePerKm;
+      const costPack = packagingPerOrder;
+      const costFailure = failureProb * avgLossOnFailure;
+      const costOsago = annualMileage > 0 ? (osagoAnnual / annualMileage) * kmPerOrder : 0;
+      const costOther = otherVarPerOrder;
+
+      const varCostPerOrder = costFuel + costLabor + costDepr + costMaint + costPack + costFailure + costOsago + costOther;
+      const avoidableCostPerOrder = costFuel + costLabor + costPack + costOther;
+      const marginalIncomePerOrder = operatorIncomePerOrder - varCostPerOrder;
+
+      const revenueMonth = ordersPerMonth * operatorIncomePerOrder;
+      const varCostsMonth = ordersPerMonth * varCostPerOrder;
+      const totalKmMonth = ordersPerMonth * kmPerOrder;
+      const totalHoursMonth = ordersPerMonth * effectiveCycleHours;
+
+      const activeClients = ordersPerClientMonth > 0 ? Math.ceil(ordersPerMonth / ordersPerClientMonth) : 0;
+      const loyalClientsCount = Math.round(activeClients * loyalClientsShare);
+
+      return {
+        routeId: route.id,
+        routeName: route.name,
+        optimalCouriers,
+        activeCouriers,
+        ordersPerMonth,
+        operatorIncomePerOrder,
+        kmPerOrder,
+        hoursPerOrder,
+        varCostPerOrder,
+        avoidableCostPerOrder,
+        marginalIncomePerOrder,
+        revenueMonth,
+        varCostsMonth,
+        totalKmMonth,
+        totalHoursMonth,
+        activeClients,
+        loyalClientsCount,
+        breakdown: [
+          { name: "Топливо", val: costFuel, type: "Избежимые", formula: `Пробег (${kmPerOrder} км) × Расход (${fuelConsumption} л/100км) / 100 × Цена (${fuelPrice.toFixed(2)} ₽)` },
+          { name: "Оплата труда курьера", val: costLabor, type: "Избежимые", formula: laborFormulaText },
+          { name: "Амортизация / износ авто", val: costDepr, type: "Условно-постоянные", formula: `Пробег (${kmPerOrder} км) × Норма (${depreciationPerKm} ₽/км)` },
+          { name: "ТО, ремонт и шины", val: costMaint, type: "Условно-постоянные", formula: `Пробег (${kmPerOrder} км) × Норма (${maintenancePerKm} ₽/км)` },
+          { name: "Упаковка", val: costPack, type: "Избежимые", formula: `Из допущений (${packagingPerOrder} ₽/зак.)` },
+          { name: "Возвраты и компенсации", val: costFailure, type: "Событийные", formula: `Вероятность (${(failureProb * 100).toFixed(1)}%) × Средний убыток (${avgLossOnFailure} ₽)` },
+          { name: "Распределённое ОСАГО", val: costOsago, type: "Условно-постоянные", formula: `ОСАГО (${osagoAnnual} ₽) / Год. пробег (${annualMileage} км) × Пробег (${kmPerOrder} км)` },
+          { name: "Прочие (эквайринг, связь)", val: costOther, type: "Избежимые", formula: `Из допущений (${otherVarPerOrder} ₽/зак.)` }
+        ]
+      };
+    }
+
+    function calculateConsolidatedModel(overrides = {}) {
+      const routeResults = state.routes.map(r => calculateSingleRoute(r, overrides));
+
+      let totalOrdersMonth = 0;
+      let totalRevenue = 0;
+      let totalVarCosts = 0;
+      let totalKmMonth = 0;
+      let totalHoursMonth = 0;
+      let totalActiveClients = 0;
+      let totalLoyalClients = 0;
+
+      routeResults.forEach(res => {
+        totalOrdersMonth += res.ordersPerMonth;
+        totalRevenue += res.revenueMonth;
+        totalVarCosts += res.varCostsMonth;
+        totalKmMonth += res.totalKmMonth;
+        totalHoursMonth += res.totalHoursMonth;
+        totalActiveClients += res.activeClients;
+        totalLoyalClients += res.loyalClientsCount;
+      });
+
+      const avgIncomePerOrder = totalOrdersMonth > 0 ? totalRevenue / totalOrdersMonth : 0;
+      const avgVarCostPerOrder = totalOrdersMonth > 0 ? totalVarCosts / totalOrdersMonth : 0;
+      const avgMarginPerOrder = avgIncomePerOrder - avgVarCostPerOrder;
+
+      // Постоянные затраты (общие по предприятию)
+      const baseRoute = state.routes[0];
+      const socialContribRate = getRouteAssumptionVal(baseRoute, "socialContribRate");
+      const usnTaxRate = getRouteAssumptionVal(baseRoute, "usnTaxRate");
+      const usnReductionLimit = getRouteAssumptionVal(baseRoute, "usnReductionLimit");
+
+      const adminRow = state.fixedCosts.find(x => x.id === "adminSalary");
+      const adminSalary = adminRow ? Number(adminRow.amount) : 0;
+      const calcSocialContrib = Math.round(adminSalary * socialContribRate);
+      const calcInjuryContrib = Math.round(adminSalary * 0.002); // 0,2% от зарплаты администратора (ФОТ)
+
+      state.routes.forEach(r => {
+        const injAssump = r.assumptions.find(x => x.id === "injuryContribMonthly");
+        if (injAssump) injAssump.value = calcInjuryContrib;
+      });
+
+      let totalFixedNoUsn = 0;
+      state.fixedCosts.forEach(item => {
+        if (item.formulaKey === "socialContrib") item.amount = calcSocialContrib;
+        if (item.formulaKey === "injuryContrib") item.amount = calcInjuryContrib;
+        totalFixedNoUsn += Number(item.amount);
+      });
+
+      const contribForUsnReduction = calcSocialContrib + calcInjuryContrib;
+
+      const profitBeforeUsn = totalRevenue - totalVarCosts - totalFixedNoUsn;
+      const usnBeforeReduction = totalRevenue * usnTaxRate;
+      const maxUsnReduction = usnBeforeReduction * usnReductionLimit;
+      const actualUsnReduction = Math.min(contribForUsnReduction, maxUsnReduction);
+      const usnAfterReduction = Math.max(0, usnBeforeReduction - actualUsnReduction);
+      const profitAfterUsn = profitBeforeUsn - usnAfterReduction;
+
+      // Точка безубыточности
+      const bepBeforeUsn = avgMarginPerOrder > 0 ? Math.ceil(totalFixedNoUsn / avgMarginPerOrder) : Infinity;
+      const revenueAtBepBeforeUsn = isFinite(bepBeforeUsn) ? bepBeforeUsn * avgIncomePerOrder : Infinity;
+
+      const effMarginFullContrib = avgIncomePerOrder * (1 - usnTaxRate) - avgVarCostPerOrder;
+      const qBepFullContrib = effMarginFullContrib > 0 ? Math.ceil((totalFixedNoUsn - contribForUsnReduction) / effMarginFullContrib) : Infinity;
+
+      const effUsnHalf = usnTaxRate * (1 - usnReductionLimit);
+      const effMarginHalfUsn = avgIncomePerOrder * (1 - effUsnHalf) - avgVarCostPerOrder;
+      const qBepHalfUsn = effMarginHalfUsn > 0 ? Math.ceil(totalFixedNoUsn / effMarginHalfUsn) : Infinity;
+
+      let bepAfterUsn = Infinity;
+      if (isFinite(qBepFullContrib) && (qBepFullContrib * avgIncomePerOrder * usnTaxRate * usnReductionLimit >= contribForUsnReduction)) {
+        bepAfterUsn = qBepFullContrib;
+      } else {
+        bepAfterUsn = qBepHalfUsn;
+      }
+
+      const safetyMarginPct = (totalOrdersMonth > 0 && isFinite(bepAfterUsn))
+        ? ((totalOrdersMonth - bepAfterUsn) / totalOrdersMonth) * 100
+        : -100;
+
+      const totalAllCosts = totalVarCosts + totalFixedNoUsn + usnAfterReduction;
+      const fullCostPerOrder = totalOrdersMonth > 0 ? totalAllCosts / totalOrdersMonth : 0;
+      const fullCostPerKm = totalKmMonth > 0 ? totalAllCosts / totalKmMonth : 0;
+      const fullCostPerHour = totalHoursMonth > 0 ? totalAllCosts / totalHoursMonth : 0;
+
+      return {
+        routesCount: state.routes.length,
+        routeResults,
+        totalOrdersMonth,
+        avgIncomePerOrder,
+        avgVarCostPerOrder,
+        avgMarginPerOrder,
+        totalRevenue,
+        totalVarCosts,
+        totalFixedNoUsn,
+        profitBeforeUsn,
+        contribForUsnReduction,
+        usnBeforeReduction,
+        usnAfterReduction,
+        profitAfterUsn,
+        bepBeforeUsn,
+        revenueAtBepBeforeUsn,
+        bepAfterUsn,
+        safetyMarginPct,
+        fullCostPerOrder,
+        fullCostPerKm,
+        fullCostPerHour,
+        totalActiveClients,
+        totalLoyalClients
+      };
+    }
+
+    // =========================================================================
+    // 3. ФОРМАТИРОВАНИЕ И ОБНОВЛЕНИЕ ИНТЕРФЕЙСА
+    // =========================================================================
+
+    function fmtNum(n, dec = 0) {
+      if (!isFinite(n)) return "∞";
+      return n.toLocaleString("ru-RU", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    }
+
+    function statusBadge(status) {
+      const map = {
+        "FH": "bg-emerald-50 text-emerald-700 border-emerald-200",
+        "FM": "bg-blue-50 text-blue-700 border-blue-200",
+        "H": "bg-amber-50 text-amber-700 border-amber-200",
+        "TBD": "bg-slate-100 text-slate-700 border-slate-200"
+      };
+      return `<span class="inline-block px-2 py-0.5 text-xs font-semibold rounded border ${map[status] || map.H}">${status}</span>`;
+    }
+
+    function updateSummaryKPIs() {
+      const m = calculateConsolidatedModel();
+
+      document.getElementById("kpi-revenue").textContent = `${fmtNum(m.totalRevenue, 0)} ₽`;
+      document.getElementById("kpi-var-cost").textContent = `${fmtNum(m.avgVarCostPerOrder, 2)} ₽`;
+
+      const marginEl = document.getElementById("kpi-margin");
+      marginEl.textContent = `${fmtNum(m.avgMarginPerOrder, 2)} ₽`;
+      marginEl.className = `text-sm sm:text-base font-bold mt-0.5 ${m.avgMarginPerOrder >= 0 ? "text-blue-600" : "text-rose-600"}`;
+
+      const profitEl = document.getElementById("kpi-net-profit");
+      profitEl.textContent = `${fmtNum(m.profitAfterUsn, 0)} ₽`;
+      profitEl.className = `text-sm sm:text-base font-bold mt-0.5 ${m.profitAfterUsn >= 0 ? "text-emerald-600" : "text-rose-600"}`;
+
+      document.getElementById("kpi-bep").textContent = `${fmtNum(m.bepBeforeUsn)} / ${fmtNum(m.bepAfterUsn)} зак.`;
+      document.getElementById("kpi-full-cost").textContent = `${fmtNum(m.fullCostPerOrder, 2)} ₽`;
+    }
+
+    function renderAllTabs() {
+      updateSummaryKPIs();
+      renderAssumptionsTab();
+      renderFixedTab();
+      renderRouteCostsTab();
+      renderFinModelTab();
+      renderSensitivityTab();
+      renderRecommendationsTab();
+    }
+
+    function buildRouteSwitcherHTML(activeRouteId, onClickFnName) {
+      return state.routes.map(r => {
+        const isActive = r.id === activeRouteId;
+        return `
+          <button type="button" onclick="${onClickFnName}(${r.id})"
+            class="px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
+              isActive
+                ? "bg-white text-blue-600 shadow-2xs border border-slate-200/80"
+                : "text-slate-600 hover:text-slate-900"
+            }">
+            ${r.name}
+          </button>
+        `;
+      }).join("");
+    }
+
+    function switchAssumptionsRoute(routeId) {
+      state.activeAssumptionsRouteId = routeId;
+      renderAssumptionsTab();
+    }
+
+    function switchCostsRoute(routeId) {
+      state.activeCostsRouteId = routeId;
+      renderRouteCostsTab();
+    }
+
+    function renderAssumptionsTab() {
+      if (!state.routes.some(r => r.id === state.activeAssumptionsRouteId)) {
+        state.activeAssumptionsRouteId = state.routes[0].id;
+      }
+      const route = state.routes.find(r => r.id === state.activeAssumptionsRouteId);
+      document.getElementById("assumptions-route-switcher").innerHTML = buildRouteSwitcherHTML(route.id, "switchAssumptionsRoute");
+
+      const res = calculateSingleRoute(route);
+
+      const bannerEl = document.getElementById("courier-warning-banner");
+      if (route.courierWarningMsg) {
+        bannerEl.classList.remove("hidden");
+        bannerEl.innerHTML = `
+          <span class="text-base">⚠️</span>
+          <span>${route.courierWarningMsg} (оптимально для спроса ${route.baseOrdersDemand} зак./день: ${res.optimalCouriers} чел.)</span>
+        `;
+      } else {
+        bannerEl.classList.add("hidden");
+        bannerEl.innerHTML = "";
+      }
+
+      document.getElementById("assumptions-tbody").innerHTML = route.assumptions.map(item => {
+        const isCouriersRow = item.id === "couriersCount";
+        const isVehiclesRow = item.id === "vehiclesCount";
+        const rowHighlight = isCouriersRow && route.courierStatus !== "optimal" ? "bg-rose-50/60" : "hover:bg-slate-50/80";
+
+        return `
+          <tr id="assump-row-${item.id}" class="${rowHighlight} transition">
+            <td class="py-2.5 px-4 text-slate-400 font-mono text-xs">${item.num}</td>
+            <td class="py-2.5 px-4 font-medium text-slate-800">
+              <div>${item.name}</div>
+              ${isCouriersRow ? `<div id="courier-inline-warn-${route.id}" class="${route.courierWarningMsg ? "" : "hidden"} text-[11px] font-semibold text-rose-600 mt-0.5">${route.courierWarningMsg}</div>` : ""}
+            </td>
+            <td class="py-2.5 px-4">
+              <div class="flex items-center gap-1.5">
+                <input id="assump-input-${item.id}" type="number" step="${isCouriersRow || isVehiclesRow ? "1" : "any"}" min="${isCouriersRow ? "1" : "0"}" value="${item.value}"
+                  oninput="handleRouteAssumptionLive(${route.id}, '${item.id}', this.value)"
+                  onchange="updateRouteAssumption(${route.id}, '${item.id}', this.value)"
+                  onkeydown="if(event.key==='Enter') this.blur()"
+                  class="w-full ${isCouriersRow && route.courierStatus !== "optimal" ? "bg-rose-50 border-rose-400 text-rose-900" : "bg-amber-50/70 border-amber-300/80 text-slate-900"} border rounded-lg px-2.5 py-1 text-right font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                ${isCouriersRow ? `
+                  <button id="courier-auto-btn-${route.id}" type="button" onclick="resetAutoCouriers(${route.id})" title="Авторасчёт оптимального числа курьеров"
+                    class="text-[11px] px-2 py-1 rounded-lg ${route.manualCouriers ? "bg-blue-100 hover:bg-blue-200 text-blue-800" : "bg-slate-200 hover:bg-slate-300 text-slate-700"} font-semibold shrink-0">
+                    Авто (${res.optimalCouriers})
+                  </button>
+                ` : ""}
+              </div>
+            </td>
+            <td class="py-2.5 px-4 text-slate-500 text-xs">${item.unit}</td>
+            <td class="py-2.5 px-4">${statusBadge(item.status)}</td>
+            <td class="py-2.5 px-4 text-xs text-slate-600">${item.source}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function resetAutoCouriers(routeId) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.manualCouriers = false;
+      renderAllTabs();
+      showToast("Количество курьеров возвращено к оптимальному расчёту", "info");
+    }
+
+    function applyAssumptionValueToState(route, id, val, showAlertToast = false) {
+      const item = route.assumptions.find(x => x.id === id);
+      if (!item) return;
+
+      const parsed = parseFloat(val);
+      if (isNaN(parsed)) return;
+
+      if (id === "ordersPerDay") {
+        route.baseOrdersDemand = Math.max(0, parsed);
+        route.targetOrdersPerDay = route.baseOrdersDemand;
+        item.value = route.baseOrdersDemand;
+        calculateSingleRoute(route);
+      } else if (id === "couriersCount") {
+        const newCouriers = Math.max(1, Math.round(parsed));
+        route.manualCouriers = true;
+        item.value = newCouriers;
+        const veh = route.assumptions.find(x => x.id === "vehiclesCount");
+        if (veh) veh.value = newCouriers;
+
+        const prevStatus = route.courierStatus;
+        calculateSingleRoute(route);
+        if (showAlertToast && route.courierWarningMsg && route.courierStatus !== prevStatus) {
+          showToast(route.courierWarningMsg, "error");
+        }
+      } else if (id === "vehiclesCount") {
+        const newVeh = Math.max(1, Math.round(parsed));
+        route.manualCouriers = true;
+        item.value = newVeh;
+        const cour = route.assumptions.find(x => x.id === "couriersCount");
+        if (cour) cour.value = newVeh;
+
+        const prevStatus = route.courierStatus;
+        calculateSingleRoute(route);
+        if (showAlertToast && route.courierWarningMsg && route.courierStatus !== prevStatus) {
+          showToast(route.courierWarningMsg, "error");
+        }
+      } else {
+        item.value = parsed;
+        calculateSingleRoute(route);
+      }
+    }
+
+    // Мгновенное обновление при нажатии стрелок спиннера (▲/▼) без перерисовки активного input
+    function handleRouteAssumptionLive(routeId, id, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      applyAssumptionValueToState(route, id, val, true);
+
+      const res = calculateSingleRoute(route);
+      const ordersInput = document.getElementById("assump-input-ordersPerDay");
+      const ordersItem = route.assumptions.find(x => x.id === "ordersPerDay");
+      if (ordersInput && ordersItem && id !== "ordersPerDay") {
+        ordersInput.value = ordersItem.value;
+      }
+
+      const couriersInput = document.getElementById("assump-input-couriersCount");
+      const couriersItem = route.assumptions.find(x => x.id === "couriersCount");
+      if (couriersInput && couriersItem && id !== "couriersCount") {
+        couriersInput.value = couriersItem.value;
+      }
+
+      const vehiclesInput = document.getElementById("assump-input-vehiclesCount");
+      const vehiclesItem = route.assumptions.find(x => x.id === "vehiclesCount");
+      if (vehiclesInput && vehiclesItem && id !== "vehiclesCount") {
+        vehiclesInput.value = vehiclesItem.value;
+      }
+
+      const autoBtn = document.getElementById(`courier-auto-btn-${route.id}`);
+      if (autoBtn) {
+        autoBtn.textContent = `Авто (${res.optimalCouriers})`;
+        autoBtn.className = `text-[11px] px-2 py-1 rounded-lg ${route.manualCouriers ? "bg-blue-100 hover:bg-blue-200 text-blue-800" : "bg-slate-200 hover:bg-slate-300 text-slate-700"} font-semibold shrink-0`;
+      }
+
+      const bannerEl = document.getElementById("courier-warning-banner");
+      const inlineWarn = document.getElementById(`courier-inline-warn-${route.id}`);
+      const couriersRow = document.getElementById("assump-row-couriersCount");
+
+      if (route.courierWarningMsg) {
+        if (bannerEl) {
+          bannerEl.classList.remove("hidden");
+          bannerEl.innerHTML = `<span class="text-base">⚠️</span><span>${route.courierWarningMsg} (оптимально для спроса ${route.baseOrdersDemand} зак./день: ${res.optimalCouriers} чел.)</span>`;
+        }
+        if (inlineWarn) {
+          inlineWarn.classList.remove("hidden");
+          inlineWarn.textContent = route.courierWarningMsg;
+        }
+        if (couriersRow) couriersRow.className = "bg-rose-50/60 transition";
+        if (couriersInput) {
+          couriersInput.className = "w-full bg-rose-50 border-rose-400 text-rose-900 border rounded-lg px-2.5 py-1 text-right font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500";
+        }
+      } else {
+        if (bannerEl) bannerEl.classList.add("hidden");
+        if (inlineWarn) inlineWarn.classList.add("hidden");
+        if (couriersRow) couriersRow.className = "hover:bg-slate-50/80 transition";
+        if (couriersInput) {
+          couriersInput.className = "w-full bg-amber-50/70 border-amber-300/80 text-slate-900 border rounded-lg px-2.5 py-1 text-right font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500";
+        }
+      }
+
+      updateSummaryKPIs();
+      renderFixedTab();
+      renderRouteCostsTab();
+      renderFinModelTab();
+      renderSensitivityTab();
+      renderRecommendationsTab();
+    }
+
+    function updateRouteAssumption(routeId, id, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      applyAssumptionValueToState(route, id, val, true);
+      renderAllTabs();
+    }
+
+    function updateRouteAssumption(routeId, id, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      const item = route.assumptions.find(x => x.id === id);
+      if (item) {
+        item.value = parseFloat(val) || 0;
+        // Если меняем курьеров, приравниваем ТС
+        if (id === "couriersCount") {
+          const veh = route.assumptions.find(x => x.id === "vehiclesCount");
+          if (veh) veh.value = item.value;
+        }
+        renderAllTabs();
+      }
+    }
+
+    function renderFixedTab() {
+      const m = calculateConsolidatedModel();
+      document.getElementById("fixed-tbody").innerHTML = state.fixedCosts.map(item => `
+        <tr class="hover:bg-slate-50/80 transition ${!item.editable ? "bg-slate-50/60" : ""}">
+          <td class="py-2.5 px-4 font-medium text-slate-800">${item.name}</td>
+          <td class="py-2.5 px-4">
+            ${item.editable
+              ? `<input type="number" step="100" value="${item.amount}" onchange="updateFixedAmount('${item.id}', this.value)" class="w-full bg-amber-50/70 border border-amber-300/80 rounded-lg px-2.5 py-1 text-right font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500" />`
+              : `<div class="text-right font-semibold text-slate-700 px-2.5 py-1 bg-slate-100 rounded-lg border border-slate-200">${fmtNum(item.amount, 0)}</div>`
+            }
+          </td>
+          <td class="py-2.5 px-4">${statusBadge(item.status)}</td>
+          <td class="py-2.5 px-4 text-xs text-slate-600">${item.comment}</td>
+        </tr>
+      `).join("") + `
+        <tr class="bg-blue-50/80 font-bold text-slate-900 border-t-2 border-blue-200">
+          <td class="py-3 px-4">ИТОГО постоянных затрат без УСН</td>
+          <td class="py-3 px-4 text-right text-blue-900">${fmtNum(m.totalFixedNoUsn, 0)} ₽</td>
+          <td class="py-3 px-4"></td>
+          <td class="py-3 px-4 text-xs font-normal text-blue-800">Сумма всех постоянных статей за месяц</td>
+        </tr>
+        <tr class="bg-emerald-50/70 font-semibold text-emerald-900">
+          <td class="py-2.5 px-4">Взносы для уменьшения налога УСН (страховые + травматизм)</td>
+          <td class="py-2.5 px-4 text-right">${fmtNum(m.contribForUsnReduction, 0)} ₽</td>
+          <td class="py-2.5 px-4">${statusBadge("FH")}</td>
+          <td class="py-2.5 px-4 text-xs font-normal text-emerald-800">Уменьшают налог УСН 6% (но не более чем на 50% от начисленного налога)</td>
+        </tr>
+      `;
+    }
+
+    function updateFixedAmount(id, val) {
+      const item = state.fixedCosts.find(x => x.id === id);
+      if (item && item.editable) {
+        item.amount = parseFloat(val) || 0;
+        renderAllTabs();
+      }
+    }
+
+    function renderRouteCostsTab() {
+      if (!state.routes.some(r => r.id === state.activeCostsRouteId)) {
+        state.activeCostsRouteId = state.routes[0].id;
+      }
+      const route = state.routes.find(r => r.id === state.activeCostsRouteId);
+      document.getElementById("costs-route-switcher").innerHTML = buildRouteSwitcherHTML(route.id, "switchCostsRoute");
+
+      const res = calculateSingleRoute(route);
+      document.getElementById("route-costs-tbody").innerHTML = res.breakdown.map(row => {
+        const share = res.varCostPerOrder > 0 ? (row.val / res.varCostPerOrder) * 100 : 0;
+        return `
+          <tr class="hover:bg-slate-50/80">
+            <td class="py-2.5 px-4 font-medium text-slate-800">${row.name}</td>
+            <td class="py-2.5 px-4 text-right font-semibold text-slate-900">${fmtNum(row.val, 2)} ₽</td>
+            <td class="py-2.5 px-4 text-right text-slate-500 text-xs">${fmtNum(share, 1)}%</td>
+            <td class="py-2.5 px-4 text-xs"><span class="px-2.5 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">${row.type}</span></td>
+            <td class="py-2.5 px-4 text-xs text-slate-500">${row.formula}</td>
+          </tr>
+        `;
+      }).join("") + `
+        <tr class="bg-amber-50 font-bold text-slate-900 border-t-2 border-amber-200">
+          <td class="py-3 px-4">ИТОГО переменные затраты на 1 заказ (${route.name})</td>
+          <td class="py-3 px-4 text-right text-amber-900">${fmtNum(res.varCostPerOrder, 2)} ₽</td>
+          <td class="py-3 px-4 text-right">100,0%</td>
+          <td class="py-3 px-4"></td>
+          <td class="py-3 px-4 text-xs font-normal text-amber-800">Используется в расчёте маржинального дохода заказа</td>
+        </tr>
+        <tr class="bg-slate-50 font-medium text-slate-700">
+          <td class="py-2.5 px-4">В т.ч. избежимые затраты на 1 заказ</td>
+          <td class="py-2.5 px-4 text-right">${fmtNum(res.avoidableCostPerOrder, 2)} ₽</td>
+          <td class="py-2.5 px-4 text-right text-xs">${fmtNum(res.varCostPerOrder > 0 ? (res.avoidableCostPerOrder / res.varCostPerOrder) * 100 : 0, 1)}%</td>
+          <td class="py-2.5 px-4 text-xs">Избежимые</td>
+          <td class="py-2.5 px-4 text-xs text-slate-500">Топливо + труд курьера + упаковка + прочие</td>
+        </tr>
+      `;
+    }
+
+    function renderFinModelTab() {
+      const m = calculateConsolidatedModel();
+      document.getElementById("finmodel-routes-badge").textContent = `Активных маршрутов: ${m.routesCount}`;
+
+      const rows = [
+        { name: "1. Совокупное количество заказов в месяц (по всем маршрутам)", val: fmtNum(m.totalOrdersMonth, 0), unit: "зак./мес.", desc: "Сумма заказов по всем маршрутам" },
+        { name: "2. Средневзвешенный доход оператора на 1 заказ", val: fmtNum(m.avgIncomePerOrder, 2), unit: "руб./зак.", desc: "Общая выручка / Совокупные заказы" },
+        { name: "3. Средневзвешенные переменные затраты на 1 заказ", val: fmtNum(m.avgVarCostPerOrder, 2), unit: "руб./зак.", desc: "Совокупные переменные затраты / Совокупные заказы" },
+        { name: "4. Маржинальный доход с 1 заказа (CMu)", val: fmtNum(m.avgMarginPerOrder, 2), unit: "руб./зак.", desc: "Доход на заказ − Переменные затраты на заказ", highlight: "blue" },
+        { name: "5. Месячная выручка оператора (совокупная)", val: fmtNum(m.totalRevenue, 0), unit: "руб./мес.", desc: "Сумма выручки по всем маршрутам" },
+        { name: "6. Совокупные переменные затраты за месяц", val: fmtNum(m.totalVarCosts, 0), unit: "руб./мес.", desc: "Сумма переменных затрат по всем маршрутам" },
+        { name: "7. Постоянные затраты без УСН", val: fmtNum(m.totalFixedNoUsn, 0), unit: "руб./мес.", desc: "Из листа «Постоянные»" },
+        { name: "8. Операционный результат до УСН (EBITDA)", val: fmtNum(m.profitBeforeUsn, 0), unit: "руб./мес.", desc: "Выручка − Переменные затраты − Постоянные затраты", highlight: m.profitBeforeUsn >= 0 ? "emerald" : "rose" },
+        { name: "9. Страховые взносы для уменьшения УСН", val: fmtNum(m.contribForUsnReduction, 0), unit: "руб./мес.", desc: "Взносы с ФОТ администратора + травматизм (0,2%)" },
+        { name: "10. Налог УСН 6% до уменьшения", val: fmtNum(m.usnBeforeReduction, 0), unit: "руб./мес.", desc: "Выручка × 6%" },
+        { name: "11. Налог УСН к уплате (после уменьшения на взносы)", val: fmtNum(m.usnAfterReduction, 0), unit: "руб./мес.", desc: "Уменьшается на взносы, но не более чем на 50% от налога" },
+        { name: "12. Чистая прибыль оператора (после УСН)", val: fmtNum(m.profitAfterUsn, 0), unit: "руб./мес.", desc: "Результат до УСН − УСН после уменьшения", highlight: m.profitAfterUsn >= 0 ? "emerald" : "rose" },
+        { name: "13. Точка безубыточности до УСН (BEP)", val: fmtNum(m.bepBeforeUsn), unit: "зак./мес.", desc: "ROUNDUP(Постоянные / Средний маржинальный доход)" },
+        { name: "14. Выручка в точке безубыточности (до УСН)", val: fmtNum(m.revenueAtBepBeforeUsn, 0), unit: "руб./мес.", desc: "BEP до УСН × Средний доход на заказ" },
+        { name: "15. Точка безубыточности после сценарного УСН", val: fmtNum(m.bepAfterUsn), unit: "зак./мес.", desc: "Учитывает налоговую нагрузку УСН и вычет страховых взносов", highlight: "blue" },
+        { name: "16. Запас финансовой прочности по спросу (MOS)", val: fmtNum(m.safetyMarginPct, 1) + "%", unit: "%", desc: "(Факт. заказы − BEP после УСН) / Факт. заказы" },
+        { name: "17. Полная себестоимость 1 заказа", val: fmtNum(m.fullCostPerOrder, 2), unit: "руб./зак.", desc: "(Переменные + Постоянные + УСН) / Совокупные заказы" },
+        { name: "18. Полная себестоимость 1 км пробега", val: fmtNum(m.fullCostPerKm, 2), unit: "руб./км", desc: "Все затраты с УСН / Общий пробег по всем маршрутам" },
+        { name: "19. Полная себестоимость 1 часа работы", val: fmtNum(m.fullCostPerHour, 2), unit: "руб./ч", desc: "Все затраты с УСН / Общие часы по всем маршрутам" },
+        { name: "20. Активные клиенты / постоянные клиенты", val: `${fmtNum(m.totalActiveClients)} / ${fmtNum(m.totalLoyalClients)}`, unit: "чел./мес.", desc: "Сумма по всем маршрутам" }
+      ];
+
+      document.getElementById("finmodel-tbody").innerHTML = rows.map(r => {
+        let rowBg = "hover:bg-slate-50/80";
+        let valColor = "text-slate-900 font-semibold";
+        if (r.highlight === "blue") { rowBg = "bg-blue-50/60"; valColor = "text-blue-900 font-bold"; }
+        if (r.highlight === "emerald") { rowBg = "bg-emerald-50/70"; valColor = "text-emerald-800 font-bold"; }
+        if (r.highlight === "rose") { rowBg = "bg-rose-50/70"; valColor = "text-rose-800 font-bold"; }
+        return `
+          <tr class="${rowBg}">
+            <td class="py-2.5 px-4 font-medium text-slate-800">${r.name}</td>
+            <td class="py-2.5 px-4 text-right ${valColor}">${r.val}</td>
+            <td class="py-2.5 px-4 text-xs text-slate-500">${r.unit}</td>
+            <td class="py-2.5 px-4 text-xs text-slate-600">${r.desc}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function getSensitivityScenarios() {
+      return [
+        { name: "1. Топливо +10%", fuelMult: 1.1, demandMult: 1.0, tariffMult: 1.0 },
+        { name: "2. Спрос −20%", fuelMult: 1.0, demandMult: 0.8, tariffMult: 1.0 },
+        { name: "3. Тариф +10%", fuelMult: 1.0, demandMult: 1.0, tariffMult: 1.1 },
+        { name: "4. Тариф −10%", fuelMult: 1.0, demandMult: 1.0, tariffMult: 0.9 },
+        { name: "5. Стресс (Топливо +10%, Спрос −20%, Тариф −10%)", fuelMult: 1.1, demandMult: 0.8, tariffMult: 0.9 }
+      ];
+    }
+
+    function renderSensitivityTab() {
+      const stressScenarios = getSensitivityScenarios();
+      const allScenarios = [
+        { name: "0. Базовый сценарий", fuelMult: 1.0, demandMult: 1.0, tariffMult: 1.0 },
+        ...stressScenarios
+      ];
+
+      document.getElementById("sensitivity-tbody").innerHTML = allScenarios.map((sc, idx) => {
+        const res = calculateConsolidatedModel(sc);
+        const isProfit = res.profitAfterUsn > 0;
+        return `
+          <tr class="${idx === 0 ? "bg-blue-50/50 font-medium" : "hover:bg-slate-50"}">
+            <td class="py-3 px-4 font-semibold text-slate-800">${sc.name}</td>
+            <td class="py-3 px-4 text-right text-xs">${Math.round(sc.fuelMult * 100)}%</td>
+            <td class="py-3 px-4 text-right text-xs">${Math.round(sc.demandMult * 100)}%</td>
+            <td class="py-3 px-4 text-right text-xs">${Math.round(sc.tariffMult * 100)}%</td>
+            <td class="py-3 px-4 text-right">${fmtNum(res.totalOrdersMonth, 0)}</td>
+            <td class="py-3 px-4 text-right">${fmtNum(res.totalRevenue, 0)} ₽</td>
+            <td class="py-3 px-4 text-right ${res.profitBeforeUsn >= 0 ? "text-slate-800" : "text-rose-600"}">${fmtNum(res.profitBeforeUsn, 0)} ₽</td>
+            <td class="py-3 px-4 text-right font-bold ${isProfit ? "text-emerald-700 bg-emerald-50" : "text-rose-700 bg-rose-50"}">${fmtNum(res.profitAfterUsn, 0)} ₽</td>
+            <td class="py-3 px-4 text-right font-semibold">${fmtNum(res.bepAfterUsn)}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    function calculateSensitivityScore() {
+      const scenarios = getSensitivityScenarios();
+      let greenCount = 0;
+      scenarios.forEach(sc => {
+        const res = calculateConsolidatedModel(sc);
+        if (res.profitAfterUsn > 0) {
+          greenCount++;
+        }
+      });
+      return { score: greenCount, total: scenarios.length };
+    }
+
+    function renderRecommendationsTab() {
+      const rating = calculateSensitivityScore();
+      const badgeColors = rating.score >= 4
+        ? "bg-emerald-50 border-emerald-200 text-emerald-800"
+        : rating.score >= 3
+          ? "bg-amber-50 border-amber-200 text-amber-800"
+          : "bg-rose-50 border-rose-200 text-rose-800";
+      const scoreTextColor = rating.score >= 4
+        ? "text-emerald-600"
+        : rating.score >= 3
+          ? "text-amber-600"
+          : "text-rose-600";
+
+      const descriptionMap = {
+        5: "Максимальная устойчивость: модель сохраняет чистую прибыль (зелёная зона) во всех 5 стресс-сценариях чувствительности.",
+        4: "Высокая устойчивость: модель прибыльна в 4 из 5 сценариев чувствительности (уязвима только в экстремальном комбо-стрессе).",
+        3: "Умеренная устойчивость: прибыль сохраняется в 3 из 5 сценариев. Рекомендуется повысить консолидацию заказов или тариф.",
+        2: "Пониженная устойчивость: модель прибыльна только в 2 из 5 сценариев. Требуется оптимизация пробега или постоянных расходов.",
+        1: "Низкая устойчивость: прибыль сохраняется лишь при росте тарифа (1 из 5 сценариев).",
+        0: "Критическая зона: ни один из 5 сценариев чувствительности не выходит в плюс после УСН."
+      };
+
+      const ratingRowHTML = `
+        <tr class="${badgeColors} border-b-2">
+          <td class="py-3.5 px-4 align-middle">
+            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white border border-current/20 text-xs font-bold uppercase tracking-wide">
+              ⭐ Оценка модели
+            </span>
+          </td>
+          <td class="py-3.5 px-4" colspan="2">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div class="text-sm font-bold text-slate-900">
+                  Индекс устойчивости по стресс-тестам (лист «Чувствительность»):
+                  <span class="text-lg font-extrabold ${scoreTextColor} ml-1">${rating.score}/${rating.total}</span>
+                </div>
+                <p class="text-xs text-slate-700 mt-0.5">
+                  ${descriptionMap[rating.score] || ""}
+                </p>
+              </div>
+              <div class="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                ${Array.from({ length: rating.total }, (_, idx) => `
+                  <span class="w-3.5 h-3.5 rounded-full ${idx < rating.score ? "bg-emerald-500" : "bg-slate-200"}"></span>
+                `).join("")}
+                <span class="ml-2 text-xs font-bold ${scoreTextColor}">${rating.score} из ${rating.total}</span>
+              </div>
+            </div>
+          </td>
+        </tr>
+      `;
+
+      document.getElementById("recommendations-tbody").innerHTML = ratingRowHTML + state.recommendations.map((rec, i) => `
+        <tr class="hover:bg-slate-50">
+          <td class="py-2.5 px-4 align-top">
+            <input type="text" value="${rec.block}" onchange="state.recommendations[${i}].block = this.value"
+              class="w-full text-xs font-bold text-slate-800 bg-slate-100 border border-slate-200 rounded-lg px-2.5 py-1.5" />
+          </td>
+          <td class="py-2.5 px-4">
+            <textarea rows="2" onchange="state.recommendations[${i}].text = this.value"
+              class="w-full text-xs sm:text-sm text-slate-700 bg-white border border-slate-200 rounded-lg p-2 focus:outline-none focus:ring-2 focus:ring-blue-500">${rec.text}</textarea>
+          </td>
+          <td class="py-2.5 px-4 text-center align-middle">
+            <button onclick="deleteRecommendation(${i})" class="text-rose-500 hover:text-rose-700 text-xs font-medium px-2 py-1 rounded hover:bg-rose-50">✕</button>
+          </td>
+        </tr>
+      `).join("");
+    }
+
+    function addRecommendation() {
+      state.recommendations.push({ block: `${state.recommendations.length + 1}. Новый вывод`, text: "Введите текст рекомендации..." });
+      renderRecommendationsTab();
+    }
+
+    function deleteRecommendation(idx) {
+      state.recommendations.splice(idx, 1);
+      renderRecommendationsTab();
+    }
+
+    // =========================================================================
+    // 4. ЯНДЕКС.КАРТЫ (EPSG:3395) + ПОСТОЯННЫЕ ЭКЗЕМПЛЯРЫ КАРТ БЕЗ БЕЛОГО ЭКРАНА
+    // =========================================================================
+
+    function getNumberedDivIcon(number) {
+      const bg = number === 1 ? "#10b981" : "#2563eb";
+      return L.divIcon({
+        className: "custom-pin-icon",
+        html: `<div style="width:30px;height:30px;border-radius:50%;background:${bg};color:#ffffff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;border:2.5px solid #ffffff;box-shadow:0 3px 8px rgba(0,0,0,0.35);">${number}</div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 15],
+        popupAnchor: [0, -15]
+      });
+    }
+
+    function computeRouteMetrics(route) {
+      const deliveryStops = Math.max(1, route.waypoints.length - 1);
+      const totalKm = route.osrmDistanceKm * (1 + route.emptyPct / 100);
+      const totalMin = route.osrmDurationMin + (deliveryStops * route.serviceMin);
+      const ordersPerTrip = Math.max(1, route.ordersPerTrip);
+
+      const kmPerOrder = route.waypoints.length >= 2 ? (totalKm / ordersPerTrip) : 0;
+      const hoursPerOrder = route.waypoints.length >= 2 ? ((totalMin / 60) / ordersPerTrip) : 0;
+
+      return { kmPerOrder, hoursPerOrder };
+    }
+
+    function buildRouteCardHTML(route, idx) {
+      const { kmPerOrder, hoursPerOrder } = computeRouteMetrics(route);
+      const canDelete = state.routes.length > 1;
+
+      return `
+        <div id="route-card-${route.id}" class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-6 shadow-xs space-y-4">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div class="flex items-center gap-2.5">
+              <span class="px-3 py-1 rounded-lg bg-blue-600 text-white text-xs font-bold">${route.name}</span>
+              <span class="text-xs text-slate-500">Яндекс.Карты • Нажмите на карту для установки точки</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="clearSingleRoute(${route.id})" class="text-xs px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium transition">
+                Очистить точки
+              </button>
+              ${canDelete ? `
+                <button type="button" onclick="deleteRoute(${route.id})" class="text-xs px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 font-medium border border-rose-200 transition">
+                  Удалить маршрут
+                </button>
+              ` : ""}
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+            <!-- Левая часть: Поиск и Яндекс.Карта -->
+            <div class="lg:col-span-7 space-y-3">
+              <div class="flex gap-2">
+                <input id="search-input-${route.id}" type="text" placeholder="Введите адрес (например: Чехов, ул. Полиграфистов 1)"
+                  onkeydown="if(event.key==='Enter') searchAddressForRoute(${route.id})"
+                  class="flex-1 text-sm border border-slate-300 rounded-xl px-3.5 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <button type="button" onclick="searchAddressForRoute(${route.id})"
+                  class="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl transition">
+                  Найти
+                </button>
+              </div>
+              <div id="map-${route.id}" class="route-map-box border border-slate-300 shadow-inner"></div>
+            </div>
+
+            <!-- Правая часть: Точки маршрута + Операционные поправки -->
+            <div class="lg:col-span-5 space-y-4">
+              <!-- Карточка 1: Точки маршрута -->
+              <div class="bg-slate-50/70 rounded-2xl p-4 border border-slate-200 space-y-3">
+                <div class="flex items-center justify-between gap-2">
+                  <h3 class="text-sm font-bold text-slate-900">
+                    Точки маршрута (<span id="pts-count-${route.id}">${route.waypoints.length}</span>)
+                  </h3>
+                  <label class="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
+                    <input type="checkbox" ${route.isRoundtrip ? "checked" : ""}
+                      onchange="toggleRoundtrip(${route.id}, this.checked)"
+                      class="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300" />
+                    <span>Кольцевой маршрут (возврат на базу)</span>
+                  </label>
+                </div>
+
+                <div id="pts-list-${route.id}" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  ${renderWaypointsListHTML(route)}
+                </div>
+              </div>
+
+              <!-- Карточка 2: Операционные поправки -->
+              <div class="bg-white rounded-2xl p-4 border border-slate-200 space-y-3.5 shadow-2xs">
+                <h3 class="text-sm font-bold text-slate-900">Операционные поправки (по методологии ЦТК)</h3>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="block text-xs text-slate-500">Порожний пробег (%)</label>
+                      <button type="button" onclick="recalcAutoEmptyPct(${route.id})" title="Авторасчёт: (возврат в А / дистанция OSRM) × 100%"
+                        class="text-[11px] text-blue-600 hover:underline font-semibold">
+                        Авто
+                      </button>
+                    </div>
+                    <input id="empty-input-${route.id}" type="number" min="0" max="500" step="1" value="${route.emptyPct}"
+                      onchange="updateRouteEmptyPctManual(${route.id}, this.value)"
+                      class="w-full text-sm font-semibold text-slate-900 border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div>
+                    <label class="block text-xs text-slate-500 mb-1">Погрузка/вручение (мин/точку)</label>
+                    <input type="number" min="0" max="120" step="1" value="${route.serviceMin}"
+                      onchange="updateRouteOpParam(${route.id}, 'serviceMin', this.value)"
+                      class="w-full text-sm font-semibold text-slate-900 border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-xs text-slate-500 mb-1">Заказов за 1 рейс (консолидация)</label>
+                  <input id="consolidation-input-${route.id}" type="number" min="1" max="50" step="1" value="${route.ordersPerTrip}"
+                    onchange="updateRouteConsolidation(${route.id}, this.value)"
+                    class="w-full text-sm font-semibold text-slate-900 border border-slate-300 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                </div>
+
+                <!-- Сетка 2х2 с метриками -->
+                <div class="grid grid-cols-2 gap-2.5 pt-1">
+                  <div class="bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                    <div class="text-[11px] text-slate-500">Дистанция по OSRM:</div>
+                    <div id="osrm-dist-${route.id}" class="text-sm font-bold text-slate-900 mt-0.5">${route.osrmDistanceKm.toFixed(2)} км</div>
+                  </div>
+                  <div class="bg-slate-50 rounded-xl p-2.5 border border-slate-100">
+                    <div class="text-[11px] text-slate-500">Чистое время в пути:</div>
+                    <div id="osrm-time-${route.id}" class="text-sm font-bold text-slate-900 mt-0.5">${Math.round(route.osrmDurationMin)} мин</div>
+                  </div>
+                  <div class="bg-blue-50/70 rounded-xl p-2.5 border border-blue-100">
+                    <div class="text-[11px] text-blue-700 font-medium">Полный пробег на заказ:</div>
+                    <div id="full-km-${route.id}" class="text-sm font-bold text-blue-900 mt-0.5">${kmPerOrder.toFixed(2)} км</div>
+                  </div>
+                  <div class="bg-blue-50/70 rounded-xl p-2.5 border border-blue-100">
+                    <div class="text-[11px] text-blue-700 font-medium">Полный цикл заказа:</div>
+                    <div id="full-hr-${route.id}" class="text-sm font-bold text-blue-900 mt-0.5">${hoursPerOrder.toFixed(2)} ч (${Math.round(hoursPerOrder * 60)} мин)</div>
+                  </div>
+                </div>
+
+                <button type="button" onclick="applyRouteToAssumptions(${route.id})"
+                  class="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl shadow-xs transition flex items-center justify-center gap-1.5">
+                  <span>⚡ Применить маршрут в финмодель</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderWaypointsListHTML(route) {
+      if (route.waypoints.length === 0) {
+        return `<div class="text-xs text-slate-400 italic py-5 text-center">Нажмите на карту или воспользуйтесь поиском адреса</div>`;
+      }
+      return route.waypoints.map((wp, idx) => {
+        const badgeBg = idx === 0 ? "bg-emerald-600" : "bg-blue-600";
+        return `
+          <div class="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-xl border border-slate-200 text-xs shadow-2xs">
+            <div class="flex items-center gap-2.5 min-w-0">
+              <span class="w-5 h-5 rounded-full ${badgeBg} text-white flex items-center justify-center font-bold text-[11px] shrink-0">
+                ${idx + 1}
+              </span>
+              <span class="truncate font-medium text-slate-800" title="${wp.name}">
+                ${getPointLabel(idx)}: ${wp.name}
+              </span>
+            </div>
+            <button type="button" onclick="removeWaypoint(${route.id}, ${idx})"
+              class="text-slate-400 hover:text-rose-600 font-bold px-1 text-sm leading-none" title="Удалить точку">
+              ×
+            </button>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function updateRouteRightPanel(route) {
+      const countEl = document.getElementById(`pts-count-${route.id}`);
+      const listEl = document.getElementById(`pts-list-${route.id}`);
+      const emptyEl = document.getElementById(`empty-input-${route.id}`);
+      const consEl = document.getElementById(`consolidation-input-${route.id}`);
+      const distEl = document.getElementById(`osrm-dist-${route.id}`);
+      const timeEl = document.getElementById(`osrm-time-${route.id}`);
+      const fullKmEl = document.getElementById(`full-km-${route.id}`);
+      const fullHrEl = document.getElementById(`full-hr-${route.id}`);
+
+      if (countEl) countEl.textContent = route.waypoints.length;
+      if (listEl) listEl.innerHTML = renderWaypointsListHTML(route);
+      if (emptyEl) emptyEl.value = route.emptyPct;
+      if (consEl) consEl.value = route.ordersPerTrip;
+
+      const { kmPerOrder, hoursPerOrder } = computeRouteMetrics(route);
+      if (distEl) distEl.textContent = `${route.osrmDistanceKm.toFixed(2)} км`;
+      if (timeEl) timeEl.textContent = `${Math.round(route.osrmDurationMin)} мин`;
+      if (fullKmEl) fullKmEl.textContent = `${kmPerOrder.toFixed(2)} км`;
+      if (fullHrEl) fullHrEl.textContent = `${hoursPerOrder.toFixed(2)} ч (${Math.round(hoursPerOrder * 60)} мин)`;
+    }
+
+    function ensureMapInitialized(route) {
+      const mapEl = document.getElementById(`map-${route.id}`);
+      if (!mapEl) return;
+
+      if (mapInstances[route.id] && mapInstances[route.id].container === mapEl) {
+        return;
+      }
+
+      if (mapInstances[route.id]) {
+        mapInstances[route.id].map.remove();
+        delete mapInstances[route.id];
+      }
+
+      const preset = CITY_PRESETS[state.city] || CITY_PRESETS.chekhov;
+      const center = route.waypoints.length > 0
+        ? [route.waypoints[0].lat, route.waypoints[0].lng]
+        : preset.center;
+
+      const map = L.map(mapEl, {
+        crs: L.CRS.EPSG3395,
+        center: center,
+        zoom: preset.zoom,
+        zoomControl: true
+      });
+
+      L.tileLayer(
+        "https://core-renderer-tiles.maps.yandex.net/tiles?l=map&v=21.06.18-0&x={x}&y={y}&z={z}&scale=1&lang=ru_RU",
+        {
+          subdomains: ["01", "02", "03", "04"],
+          maxZoom: 19,
+          attribution: "&copy; Яндекс.Карты"
+        }
+      ).addTo(map);
+
+      const markersLayer = L.layerGroup().addTo(map);
+      const lineLayer = L.layerGroup().addTo(map);
+
+      mapInstances[route.id] = {
+        map,
+        container: mapEl,
+        markersLayer,
+        lineLayer
+      };
+
+      map.on("click", function(e) {
+        const currentRoute = state.routes.find(r => r.id === route.id);
+        if (!currentRoute) return;
+
+        currentRoute.waypoints.push({
+          name: `Точка на карте (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`,
+          lat: e.latlng.lat,
+          lng: e.latlng.lng
+        });
+
+        if (!currentRoute.manualOrdersPerTrip) {
+          currentRoute.ordersPerTrip = Math.max(1, currentRoute.waypoints.length - 1);
+        }
+        currentRoute.manualEmptyPct = false;
+        currentRoute.routeGeometry = null;
+
+        updateRouteRightPanel(currentRoute);
+        redrawMapLayers(currentRoute, true);
+        updateSummaryKPIs();
+      });
+
+      redrawMapLayers(route, !route.routeGeometry);
+    }
+
+    async function redrawMapLayers(route, fetchOsrm = false) {
+      const inst = mapInstances[route.id];
+      if (!inst) return;
+
+      inst.markersLayer.clearLayers();
+      inst.lineLayer.clearLayers();
+
+      route.waypoints.forEach((wp, idx) => {
+        const marker = L.marker([wp.lat, wp.lng], {
+          icon: getNumberedDivIcon(idx + 1)
+        }).addTo(inst.markersLayer);
+        marker.bindPopup(`<b>${getPointLabel(idx)}:</b> ${wp.name}`);
+      });
+
+      if (route.waypoints.length < 2) {
+        route.osrmDistanceKm = 0;
+        route.osrmDurationMin = 0;
+        route.returnLegKm = 0;
+        route.routeGeometry = null;
+        if (!route.manualEmptyPct) route.emptyPct = 0;
+        updateRouteRightPanel(route);
+        return;
+      }
+
+      const pts = [...route.waypoints];
+      if (route.isRoundtrip && pts.length >= 2) {
+        pts.push(pts[0]);
+      }
+
+      if (!fetchOsrm && route.routeGeometry) {
+        L.geoJSON(route.routeGeometry, {
+          style: { color: "#2563eb", weight: 5, opacity: 0.9 }
+        }).addTo(inst.lineLayer);
+        return;
+      }
+
+      const rawCoords = pts.map(p => [p.lat, p.lng]);
+      L.polyline(rawCoords, {
+        color: "#2563eb",
+        weight: 4,
+        opacity: 0.45,
+        dashArray: "6, 8"
+      }).addTo(inst.lineLayer);
+
+      if (fetchOsrm) {
+        try {
+          const coordsStr = pts.map(p => `${p.lng.toFixed(6)},${p.lat.toFixed(6)}`).join(";");
+          const url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+          const resp = await fetch(url);
+          const data = await resp.json();
+
+          if (data.code === "Ok" && data.routes && data.routes.length > 0) {
+            const best = data.routes[0];
+            const totalKm = best.distance / 1000;
+            route.osrmDistanceKm = totalKm;
+            route.osrmDurationMin = best.duration / 60;
+            route.routeGeometry = best.geometry;
+
+            let returnKm = 0;
+            if (route.isRoundtrip && best.legs && best.legs.length > 0) {
+              returnKm = best.legs[best.legs.length - 1].distance / 1000;
+            } else {
+              const lastWp = route.waypoints[route.waypoints.length - 1];
+              const firstWp = route.waypoints[0];
+              try {
+                const retUrl = `https://router.project-osrm.org/route/v1/driving/${lastWp.lng.toFixed(6)},${lastWp.lat.toFixed(6)};${firstWp.lng.toFixed(6)},${firstWp.lat.toFixed(6)}?overview=false`;
+                const retResp = await fetch(retUrl);
+                const retData = await retResp.json();
+                if (retData.code === "Ok" && retData.routes && retData.routes[0]) {
+                  returnKm = retData.routes[0].distance / 1000;
+                } else {
+                  returnKm = haversineKm(lastWp.lat, lastWp.lng, firstWp.lat, firstWp.lng) * 1.35;
+                }
+              } catch (e) {
+                returnKm = haversineKm(lastWp.lat, lastWp.lng, firstWp.lat, firstWp.lng) * 1.35;
+              }
+            }
+
+            route.returnLegKm = returnKm;
+
+            if (!route.manualEmptyPct && totalKm > 0) {
+              route.emptyPct = Math.round((returnKm / totalKm) * 100);
+            }
+
+            inst.lineLayer.clearLayers();
+            L.geoJSON(best.geometry, {
+              style: { color: "#2563eb", weight: 5, opacity: 0.9 }
+            }).addTo(inst.lineLayer);
+          } else {
+            applyFallbackDistance(route, pts);
+          }
+        } catch (err) {
+          applyFallbackDistance(route, pts);
+        }
+
+        syncRouteOperationalToAssumptions(route);
+        updateRouteRightPanel(route);
+        updateSummaryKPIs();
+      }
+    }
+
+    function applyFallbackDistance(route, pts) {
+      let dist = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        dist += haversineKm(pts[i].lat, pts[i].lng, pts[i + 1].lat, pts[i + 1].lng) * 1.35;
+      }
+      const lastWp = route.waypoints[route.waypoints.length - 1];
+      const firstWp = route.waypoints[0];
+      const returnKm = haversineKm(lastWp.lat, lastWp.lng, firstWp.lat, firstWp.lng) * 1.35;
+
+      route.osrmDistanceKm = dist;
+      route.osrmDurationMin = (dist / 28) * 60;
+      route.returnLegKm = returnKm;
+      route.routeGeometry = {
+        type: "LineString",
+        coordinates: pts.map(p => [p.lng, p.lat])
+      };
+
+      if (!route.manualEmptyPct && dist > 0) {
+        route.emptyPct = Math.round((returnKm / dist) * 100);
+      }
+    }
+
+    function syncRouteOperationalToAssumptions(route) {
+      const { kmPerOrder, hoursPerOrder } = computeRouteMetrics(route);
+      if (kmPerOrder <= 0) return;
+      const cityName = CITY_PRESETS[state.city]?.name || "Чехов";
+      const kmItem = route.assumptions.find(x => x.id === "kmPerOrder");
+      const hrItem = route.assumptions.find(x => x.id === "hoursPerOrder");
+      if (kmItem) {
+        kmItem.value = Number(kmPerOrder.toFixed(2));
+        kmItem.source = `Авторасчёт OSRM (${cityName}): ${route.waypoints.length} точек`;
+      }
+      if (hrItem) {
+        hrItem.value = Number(hoursPerOrder.toFixed(2));
+        hrItem.source = `Авторасчёт OSRM + погрузка/вручение (${cityName})`;
+      }
+    }
+
+    function haversineKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function renderRoutesList(forceRebuild = false) {
+      const container = document.getElementById("routes-container");
+      if (forceRebuild || container.children.length !== state.routes.length) {
+        Object.keys(mapInstances).forEach(k => {
+          mapInstances[k].map.remove();
+          delete mapInstances[k];
+        });
+        container.innerHTML = state.routes.map((r, idx) => buildRouteCardHTML(r, idx)).join("");
+      }
+
+      setTimeout(() => {
+        state.routes.forEach(r => {
+          ensureMapInitialized(r);
+          if (mapInstances[r.id]) {
+            mapInstances[r.id].map.invalidateSize(true);
+            redrawMapLayers(r, false);
+          }
+        });
+      }, 60);
+    }
+
+    // =========================================================================
+    // 5. ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ НА КАРТЕ И С МАРШРУТАМИ
+    // =========================================================================
+
+    function addNewRoute() {
+      const preset = CITY_PRESETS[state.city] || CITY_PRESETS.chekhov;
+      const newId = nextRouteIdCounter++;
+      const newRoute = createRouteObject(newId, state.routes.length + 1, preset, false);
+      state.routes.push(newRoute);
+      state.activeAssumptionsRouteId = newId;
+      state.activeCostsRouteId = newId;
+
+      renderRoutesList(true);
+      updateSummaryKPIs();
+      showToast(`Добавлен пустой ${newRoute.name} с отдельными допущениями и затратами`, "info");
+    }
+
+    function deleteRoute(routeId) {
+      if (state.routes.length <= 1) return;
+      state.routes = state.routes.filter(r => r.id !== routeId);
+      state.routes.forEach((r, idx) => { r.name = `Маршрут ${idx + 1}`; });
+
+      renderRoutesList(true);
+      updateSummaryKPIs();
+      showToast("Маршрут удалён из расчёта", "info");
+    }
+
+    function clearSingleRoute(routeId) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.waypoints = [];
+      route.osrmDistanceKm = 0;
+      route.osrmDurationMin = 0;
+      route.returnLegKm = 0;
+      route.routeGeometry = null;
+      route.manualEmptyPct = false;
+      route.emptyPct = 0;
+      route.manualOrdersPerTrip = false;
+      route.ordersPerTrip = 1;
+
+      updateRouteRightPanel(route);
+      redrawMapLayers(route, false);
+      updateSummaryKPIs();
+    }
+
+    function removeWaypoint(routeId, wpIndex) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+
+      route.waypoints.splice(wpIndex, 1);
+      if (!route.manualOrdersPerTrip) {
+        route.ordersPerTrip = Math.max(1, route.waypoints.length - 1);
+      }
+      route.manualEmptyPct = false;
+      route.routeGeometry = null;
+
+      updateRouteRightPanel(route);
+      redrawMapLayers(route, true);
+      updateSummaryKPIs();
+    }
+
+    function toggleRoundtrip(routeId, isChecked) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.isRoundtrip = isChecked;
+      route.manualEmptyPct = false;
+      route.routeGeometry = null;
+      redrawMapLayers(route, true);
+    }
+
+    function updateRouteOpParam(routeId, key, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route[key] = Math.max(0, parseFloat(val) || 0);
+      updateRouteRightPanel(route);
+    }
+
+    function updateRouteEmptyPctManual(routeId, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.emptyPct = Math.max(0, parseFloat(val) || 0);
+      route.manualEmptyPct = true;
+      updateRouteRightPanel(route);
+    }
+
+    function recalcAutoEmptyPct(routeId) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.manualEmptyPct = false;
+      if (route.osrmDistanceKm > 0 && route.returnLegKm > 0) {
+        route.emptyPct = Math.round((route.returnLegKm / route.osrmDistanceKm) * 100);
+        updateRouteRightPanel(route);
+        showToast(`Порожний пробег пересчитан: ${route.emptyPct}%`, "info");
+      } else {
+        redrawMapLayers(route, true);
+      }
+    }
+
+    function updateRouteConsolidation(routeId, val) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+      route.ordersPerTrip = Math.max(1, parseInt(val, 10) || 1);
+      route.manualOrdersPerTrip = true;
+      updateRouteRightPanel(route);
+    }
+
+    function applyRouteToAssumptions(routeId) {
+      const route = state.routes.find(r => r.id === routeId);
+      if (!route) return;
+
+      const { kmPerOrder, hoursPerOrder } = computeRouteMetrics(route);
+      if (kmPerOrder <= 0) {
+        showToast("Сначала поставьте хотя бы 2 точки на карте!", "error");
+        return;
+      }
+
+      syncRouteOperationalToAssumptions(route);
+      state.activeAssumptionsRouteId = route.id;
+      state.activeCostsRouteId = route.id;
+      updateSummaryKPIs();
+      showToast(`${route.name}: применено (${kmPerOrder.toFixed(2)} км и ${hoursPerOrder.toFixed(2)} ч/заказ)`, "success");
+    }
+
+    async function searchAddressForRoute(routeId) {
+      const route = state.routes.find(r => r.id === routeId);
+      const input = document.getElementById(`search-input-${routeId}`);
+      if (!route || !input) return;
+
+      const query = input.value.trim();
+      if (!query) return;
+
+      const cityName = CITY_PRESETS[state.city]?.name || "Чехов";
+      const fullQuery = query.toLowerCase().includes(cityName.toLowerCase()) ? query : `${cityName}, ${query}`;
+
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=ru&q=${encodeURIComponent(fullQuery)}`;
+        const resp = await fetch(url);
+        const items = await resp.json();
+
+        if (items && items.length > 0) {
+          const lat = parseFloat(items[0].lat);
+          const lng = parseFloat(items[0].lon);
+          const shortLabel = items[0].display_name.split(",").slice(0, 2).join(",");
+
+          route.waypoints.push({ name: shortLabel, lat, lng });
+          if (!route.manualOrdersPerTrip) {
+            route.ordersPerTrip = Math.max(1, route.waypoints.length - 1);
+          }
+          route.manualEmptyPct = false;
+          route.routeGeometry = null;
+
+          input.value = "";
+          if (mapInstances[route.id]) {
+            mapInstances[route.id].map.setView([lat, lng], 15);
+          }
+          updateRouteRightPanel(route);
+          redrawMapLayers(route, true);
+          showToast(`Точка добавлена: ${shortLabel}`, "success");
+        } else {
+          showToast("Адрес не найден. Уточните улицу или кликните по карте.", "error");
+        }
+      } catch (e) {
+        showToast("Ошибка поиска адреса. Кликните по карте для установки точки.", "error");
+      }
+    }
+
+    // =========================================================================
+    // 6. ПЕРЕКЛЮЧЕНИЕ ВКЛАДОК, ГОРОДОВ, СБРОС И ЭКСПОРТ EXCEL
+    // =========================================================================
+
+    function openTab(tabId) {
+      document.querySelectorAll(".tab-content").forEach(el => el.classList.add("hidden"));
+      document.querySelectorAll(".tab-btn").forEach(el => {
+        el.classList.remove("active");
+        el.classList.add("text-slate-600");
+      });
+
+      document.getElementById(tabId).classList.remove("hidden");
+      const btn = document.getElementById("btn-" + tabId);
+      btn.classList.add("active");
+      btn.classList.remove("text-slate-600");
+
+      if (tabId === "tab-routing") {
+        setTimeout(() => {
+          state.routes.forEach(r => {
+            if (mapInstances[r.id]) {
+              mapInstances[r.id].map.invalidateSize(true);
+              redrawMapLayers(r, false);
+            }
+          });
+        }, 80);
+      } else {
+        renderAllTabs();
+      }
+    }
+
+    function switchCity(cityKey) {
+      state.city = cityKey;
+      const preset = CITY_PRESETS[cityKey] || CITY_PRESETS.chekhov;
+      nextRouteIdCounter = 2;
+      state.routes = [createRouteObject(1, 1, preset, true)];
+      state.activeAssumptionsRouteId = 1;
+      state.activeCostsRouteId = 1;
+
+      renderRoutesList(true);
+      renderAllTabs();
+      showToast(`Выбран город: г. ${preset.name}`, "info");
+    }
+
+    function resetAll() {
+      document.getElementById("city-selector").value = "chekhov";
+      switchCity("chekhov");
+    }
+
+    function showToast(msg, type = "info") {
+      const container = document.getElementById("toast-container");
+      const el = document.createElement("div");
+      const colors = type === "success"
+        ? "bg-emerald-800 text-white border-emerald-700"
+        : type === "error"
+          ? "bg-rose-800 text-white border-rose-700"
+          : "bg-slate-900 text-white border-slate-700";
+      el.className = `px-4 py-3 rounded-xl shadow-lg border text-xs sm:text-sm font-medium transition-opacity duration-300 ${colors}`;
+      el.textContent = msg;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = "0";
+        setTimeout(() => el.remove(), 300);
+      }, 3000);
+    }
+
+    function exportToExcel() {
+      try {
+        const wb = XLSX.utils.book_new();
+        const m = calculateConsolidatedModel();
+
+        // 1. Сводная финансовая модель
+        const wsFin = [
+          ["Показатель", "Значение", "Ед. изм."],
+          ["Количество маршрутов", m.routesCount, "шт."],
+          ["Совокупные заказы в месяц", m.totalOrdersMonth, "зак."],
+          ["Средний доход на заказ", Number(m.avgIncomePerOrder.toFixed(2)), "руб."],
+          ["Средние переменные затраты на заказ", Number(m.avgVarCostPerOrder.toFixed(2)), "руб."],
+          ["Маржинальный доход на заказ", Number(m.avgMarginPerOrder.toFixed(2)), "руб."],
+          ["Месячная выручка", Number(m.totalRevenue.toFixed(2)), "руб."],
+          ["Совокупные переменные затраты", Number(m.totalVarCosts.toFixed(2)), "руб."],
+          ["Постоянные затраты без УСН", m.totalFixedNoUsn, "руб."],
+          ["Прибыль до УСН", Number(m.profitBeforeUsn.toFixed(2)), "руб."],
+          ["УСН 6% к уплате", Number(m.usnAfterReduction.toFixed(2)), "руб."],
+          ["Чистая прибыль после УСН", Number(m.profitAfterUsn.toFixed(2)), "руб."],
+          ["BEP до УСН", isFinite(m.bepBeforeUsn) ? m.bepBeforeUsn : "Убыточно", "зак."],
+          ["BEP после сценарного УСН", isFinite(m.bepAfterUsn) ? m.bepAfterUsn : "Убыточно", "зак."],
+          ["Полная себестоимость 1 заказа", Number(m.fullCostPerOrder.toFixed(2)), "руб."]
+        ];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsFin), "Финансовая модель");
+
+        // 2. Постоянные затраты
+        const wsFixed = [
+          ["Статья затрат", "Сумма, руб./мес.", "Статус", "Комментарий"],
+          ...state.fixedCosts.map(f => [f.name, f.amount, f.status, f.comment]),
+          ["ИТОГО постоянных затрат без УСН", m.totalFixedNoUsn, "", ""]
+        ];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsFixed), "Постоянные");
+
+        // 3. Допущения и затраты по каждому маршруту
+        state.routes.forEach((route, idx) => {
+          const wsAssump = [
+            ["№", "Параметр", "Значение", "Ед. изм.", "Статус", "Источник"],
+            ...route.assumptions.map(a => [a.num, a.name, a.value, a.unit, a.status, a.source])
+          ];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsAssump), `Допущения_М${idx + 1}`);
+
+          const res = calculateSingleRoute(route);
+          const wsCosts = [
+            ["Статья затрат на 1 заказ", "Сумма, руб.", "Тип затрат", "Формула"],
+            ...res.breakdown.map(b => [b.name, Number(b.val.toFixed(2)), b.type, b.formula]),
+            ["ИТОГО на 1 заказ", Number(res.varCostPerOrder.toFixed(2)), "", ""]
+          ];
+          XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsCosts), `Затраты_М${idx + 1}`);
+        });
+
+        // 4. Чувствительность
+        const stressScenarios = [
+          { name: "0. Базовый сценарий", fuelMult: 1.0, demandMult: 1.0, tariffMult: 1.0 },
+          ...getSensitivityScenarios()
+        ];
+        const wsSens = [
+          ["Сценарий", "Заказы/мес", "Выручка, руб.", "Прибыль до УСН, руб.", "Прибыль после УСН, руб.", "BEP после УСН, зак."],
+          ...stressScenarios.map(sc => {
+            const r = calculateConsolidatedModel(sc);
+            return [sc.name, r.totalOrdersMonth, Number(r.totalRevenue.toFixed(2)), Number(r.profitBeforeUsn.toFixed(2)), Number(r.profitAfterUsn.toFixed(2)), isFinite(r.bepAfterUsn) ? r.bepAfterUsn : "Убыточно"];
+          })
+        ];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsSens), "Чувствительность");
+
+        // 5. Рекомендации + оценка X/5
+        const rating = calculateSensitivityScore();
+        const wsRec = [
+          ["Блок", "Рекомендация"],
+          ["Оценка устойчивости модели", `${rating.score}/${rating.total} (прибыльных сценариев в листе «Чувствительность»)`],
+          ...state.recommendations.map(r => [r.block, r.text])
+        ];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsRec), "Рекомендации");
+
+        const cityName = CITY_PRESETS[state.city]?.name || "Чехов";
+        XLSX.writeFile(wb, `Финмодель_доставки_${cityName}_мультимаршрут.xlsx`);
+        showToast("Файл Excel (.xlsx) успешно сформирован и скачан!", "success");
+      } catch (e) {
+        showToast("Ошибка при экспорте Excel: " + e.message, "error");
+      }
+    }
+
+    // Запуск после загрузки страницы
+    window.onload = function() {
+      renderRoutesList(true);
+      updateSummaryKPIs();
+    };
+  </script>
+</body>
+</html>
